@@ -23,6 +23,7 @@ func (s *Store) FindPendingCallbacks(limit int) ([]model.Callback, error) {
 	now := time.Now().UTC()
 	var result []model.Callback
 	err := s.DB.Where("status IN ?", []string{"pending", "failed"}).
+		Where("attempt_count < max_attempts").
 		Where(s.DB.Where("next_retry_at IS NULL").Or("next_retry_at <= ?", now)).
 		Order("created_at ASC").
 		Limit(limit).

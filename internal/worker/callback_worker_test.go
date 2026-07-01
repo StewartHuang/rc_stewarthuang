@@ -70,4 +70,10 @@ func TestCallbackWorkerRetryThenFailed(t *testing.T) {
 	if updated.LastError == nil {
 		t.Fatal("expected non-nil last_error")
 	}
+	if updated.AttemptCount > updated.MaxAttempts {
+		t.Fatalf("attempt count %d exceeds max %d — infinite retry", updated.AttemptCount, updated.MaxAttempts)
+	}
+	if updated.NextRetryAt != nil {
+		t.Fatal("expected NextRetryAt to be nil after max attempts exhausted")
+	}
 }

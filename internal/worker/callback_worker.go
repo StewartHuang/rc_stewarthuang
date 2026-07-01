@@ -163,6 +163,7 @@ func (cw *CallbackWorker) recordCallbackFailure(cb *model.Callback, status *int,
 	if cb.AttemptCount >= cb.MaxAttempts {
 		cb.Status = "failed"
 		cb.LastError = &errMsg
+		cb.NextRetryAt = nil
 	} else {
 		nextRetry := now.Add(time.Duration(cb.RetryDelayMs) * time.Millisecond)
 		cb.NextRetryAt = &nextRetry
