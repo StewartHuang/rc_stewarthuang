@@ -21,6 +21,8 @@ type Worker struct {
 	store    *db.Store
 	cfg      *config.WorkerConfig
 	client   *http.Client
+	ctx      context.Context
+	cancel   context.CancelFunc
 	stopChan chan struct{}
 	wg       sync.WaitGroup
 }
@@ -34,12 +36,15 @@ func NewWorker(store *db.Store, cfg *config.WorkerConfig) *Worker {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Worker{
 		store: store,
 		cfg:   cfg,
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		ctx:      ctx,
+		cancel:   cancel,
 		stopChan: make(chan struct{}),
 	}
 }
@@ -60,6 +65,7 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) Stop() {
+	w.cancel()
 	close(w.stopChan)
 	w.wg.Wait()
 }
@@ -93,7 +99,7 @@ func (w *Worker) deliver(n model.Notification) {
 
 	bodyReader := bytes.NewReader([]byte(n.Body))
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		w.ctx,
 		n.Method,
 		n.URL,
 		bodyReader,
@@ -127,6 +133,7 @@ func (w *Worker) deliver(n model.Notification) {
 }
 
 func (w *Worker) recordSuccess(n *model.Notification, status int, body string, now string) {
+	n.AttemptCount++
 	n.Status = "delivered"
 	n.UpdatedAt = now
 	w.store.UpdateNotification(n)
