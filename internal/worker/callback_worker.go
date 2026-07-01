@@ -127,17 +127,20 @@ func (cw *CallbackWorker) recordCallbackSuccess(cb *model.Callback, status int, 
 	now := time.Now().UTC()
 	cb.Status = "completed"
 	cb.UpdatedAt = now
+	cb.NextRetryAt = nil
 	if err := cw.store.UpdateCallback(cb); err != nil {
 		log.Printf("callback_worker: failed to update callback %d: %v", cb.ID, err)
 	}
-	cw.store.CreateCallbackAttempt(&model.CallbackAttempt{
+	if err := cw.store.CreateCallbackAttempt(&model.CallbackAttempt{
 		CallbackID:     cb.ID,
 		AttemptNumber:  cb.AttemptCount + 1,
 		Status:         "success",
 		ResponseStatus: &status,
 		ResponseBody:   &body,
 		AttemptedAt:    now,
-	})
+	}); err != nil {
+		log.Printf("callback_worker: failed to record callback attempt for %d: %v", cb.ID, err)
+	}
 }
 
 func (cw *CallbackWorker) recordCallbackFailure(cb *model.Callback, status *int, errMsg string) {

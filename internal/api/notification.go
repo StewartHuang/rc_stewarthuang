@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"rc_stewarthuang/internal/model"
 
@@ -49,9 +50,9 @@ func (a *App) SubmitNotification(c *gin.Context) {
 
 	notifID := uuid.New().String()
 
-	url := sup.URL
+	targetURL := sup.URL
 	if req.URL != "" {
-		url = req.URL
+		targetURL = req.URL
 	}
 	method := sup.Method
 	if req.Method != "" {
@@ -74,7 +75,7 @@ func (a *App) SubmitNotification(c *gin.Context) {
 
 	n := model.Notification{
 		ID: notifID, Supplier: req.Supplier,
-		URL: url, Method: method,
+		URL: targetURL, Method: method,
 		Headers: headersJSON, Body: bodyJSON,
 		Status: "pending", AttemptCount: 0,
 		MaxAttempts: sup.RetryMaxAttempts,
@@ -83,6 +84,11 @@ func (a *App) SubmitNotification(c *gin.Context) {
 		n.IdempotencyKey = &req.IdempotencyKey
 	}
 	if req.CallbackURL != "" {
+		parsed, err := url.Parse(req.CallbackURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "callback_url must be a valid http or https URL"})
+			return
+		}
 		n.CallbackURL = &req.CallbackURL
 	}
 	if err := a.Store.CreateNotification(&n); err != nil {

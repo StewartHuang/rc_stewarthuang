@@ -48,10 +48,16 @@ func TestCallbackWorkerSuccess(t *testing.T) {
 func TestCallbackWorkerRetryThenFailed(t *testing.T) {
 	s := newTestStore(t)
 
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"server error"}`))
+	}))
+	defer server.Close()
+
 	s.CreateCallback(&model.Callback{
 		NotificationID:     "n2-cb",
 		NotificationStatus: "dead",
-		CallbackURL:        "http://localhost:19995/cb",
+		CallbackURL:        server.URL,
 		Status:             "pending",
 		MaxAttempts:        2,
 		RetryDelayMs:       50,

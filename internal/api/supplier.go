@@ -72,7 +72,8 @@ func (a *App) CreateSupplier(c *gin.Context) {
 		Name: req.Name, URL: req.URL, Method: method,
 		Headers:          headersJSON,
 		RetryMaxAttempts: 15, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 240000,
-		Enabled: true,
+		AcceptedStatuses: "[200]",
+		Enabled:          true,
 	}
 	if req.Retry != nil {
 		if req.Retry.MaxAttempts > 0 {

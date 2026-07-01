@@ -189,6 +189,43 @@ func TestCallbackInsertedOnDelivered(t *testing.T) {
 	}
 }
 
+func TestCallbackInsertedOnDead(t *testing.T) {
+	s := newTestStore(t)
+	cbURL := "https://biz.company.com/callback"
+	s.CreateSupplier(&model.Supplier{
+		Name: "dead-cb-sup", URL: "http://localhost:19995/notify", Method: "POST",
+		Headers: "{}", Enabled: true,
+		RetryMaxAttempts: 1, RetryBaseDelayMs: 50, RetryMaxDelayMs: 200,
+	})
+	s.CreateNotification(&model.Notification{
+		ID: "cb-dead", Supplier: "dead-cb-sup",
+		URL: "http://localhost:19995/notify", Method: "POST",
+		Headers: "{}", Body: `{}`,
+		Status: "pending", MaxAttempts: 1,
+		CallbackURL: &cbURL,
+	})
+
+	cfg := &config.WorkerConfig{
+		PollInterval: "100ms", MaxConcurrency: 5, HTTPTimeout: "1s",
+	}
+	w := NewWorker(s, cfg)
+	go w.Start()
+	time.Sleep(500 * time.Millisecond)
+	w.Stop()
+
+	updated, _ := s.GetNotification("cb-dead")
+	if updated.Status != "dead" {
+		t.Fatalf("expected dead, got %s", updated.Status)
+	}
+	callbacks, _ := s.FindPendingCallbacks(10)
+	if len(callbacks) != 1 {
+		t.Fatalf("expected 1 callback, got %d", len(callbacks))
+	}
+	if callbacks[0].NotificationID != "cb-dead" {
+		t.Fatalf("expected cb-dead, got %s", callbacks[0].NotificationID)
+	}
+}
+
 func TestCalculateNextRetry(t *testing.T) {
 	tests := []struct {
 		attempt  int

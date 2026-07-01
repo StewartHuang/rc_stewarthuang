@@ -133,6 +133,9 @@ func (w *Worker) deliver(n model.Notification) {
 
 	var acceptedStatuses []int
 	json.Unmarshal([]byte(sup.AcceptedStatuses), &acceptedStatuses)
+	if len(acceptedStatuses) == 0 {
+		acceptedStatuses = []int{200}
+	}
 	success := false
 	for _, s := range acceptedStatuses {
 		if respStatus == s {
