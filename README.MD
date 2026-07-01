@@ -7,30 +7,38 @@
 - **单二进制部署**: 无外部中间件依赖
 - **供应商管理**: 支持配置文件 + 运行时 API 双模式管理供应商接入信息
 - **幂等性**: 支持 idempotency_key，防止重复投递
+- **回调通知**: 投递完成或进入死信时，主动 HTTP 回调通知上游业务系统，自包含重试机制
+- **自定义成功状态码**: 每个供应商可指定哪些 HTTP status code 视为投递成功，替代固定 2xx 判断
 
 ## 架构
 
 ```
 ┌──────────────┐   POST /api/v1/notifications
-│  业务系统 A   │ ──────────────► ┌────────────────────────────────────┐
-│  业务系统 B   │                 │        Delivery Service              │
-│  业务系统 C   │                 │  单进程 (HTTP Server + Worker)        │
-└──────────────┘                 │  ┌─────────┐  ┌───────────────────┐  │
-                                 │  │ Gin API │  │ Background Worker │  │
-                                 │  └────┬────┘  │ (轮询 + HTTP 投递)  │  │
-                                 │       │        └────────┬──────────┘  │
-                                 │       ▼                  ▼            │
-                                 │  ┌─────────────────────────────────┐  │
-                                 │  │          SQLite                │  │
-                                 │  │  notifications / suppliers     │  │
-                                 │  │  delivery_attempts             │  │
-                                 │  └─────────────────────────────────┘  │
-                                 └────────────────────────────────────┘
-                                               │
-                                               ▼
-                                      ┌────────────────────┐
-                                      │  外部供应商 API      │
-                                      │  (广告/CRM/库存等)   │
+│  业务系统 A   │ ──────────────► ┌──────────────────────────────────────────┐
+│  业务系统 B   │                 │          Delivery Service                  │
+│  业务系统 C   │                 │    单进程 (HTTP Server + Workers)          │
+└──────┬───────┘                 │  ┌─────────┐  ┌──────────────────────┐   │
+       │                         │  │ Gin API │  │   Background Worker  │   │
+       │ callback                │  └────┬────┘  │  (轮询 + HTTP 投递)   │   │
+       │ HTTP POST               │       │        └────────┬─────────────┘   │
+       │ "notif_id + status"     │       ▼                  ▼               │
+       │                         │  ┌───────────────────────────────────┐   │
+       │                         │  │          SQLite                  │   │
+       │                         │  │  notifications / suppliers      │   │
+       │                         │  │  delivery_attempts / callbacks   │   │
+       │                         │  │  callback_attempts               │   │
+       │                         │  └────────────┬──────────────────────┘   │
+       │                         │               │                          │
+       │                         │               ▼                          │
+       │                         │  ┌──────────────────────┐                │
+       │                         │  │  CallbackWorker      │               │
+       │                         │  │  (轮询 callbacks 投递) │               │
+       │                         │  └──────────────────────┘                │
+       │                         └──────────────────────────────────────────┘
+       │                                       │
+       │                                       ▼
+       │                              ┌────────────────────┐
+       └──────────────────────────────│  外部供应商 API      │
                                       └────────────────────┘
 ```
 
@@ -69,9 +77,10 @@ suppliers:
   - name: ad-system
     url: https://api.adsystem.com/notify
     method: POST
+    accepted_statuses: [200, 201]                           # 可选，接受状态码列表
     headers:
       Content-Type: application/json
-      Authorization: "Bearer ${AD_SYSTEM_TOKEN}"   # 支持环境变量注入
+      Authorization: "Bearer ${AD_SYSTEM_TOKEN}"           # 支持环境变量注入
     retry:
       max_attempts: 15        # 最大重试次数
       base_delay: 1s          # 退避初始间隔
@@ -94,7 +103,8 @@ Content-Type: application/json
   "method": "PUT",
   "headers": {"X-Extra": "value"},
   "body": {"user_id": 123, "action": "register"},
-  "idempotency_key": "evt_abc123"
+  "idempotency_key": "evt_abc123",
+  "callback_url": "https://biz.company.com/callback/notif"
 }
 
 → 202 Accepted
@@ -112,6 +122,7 @@ Content-Type: application/json
 | `method` | 否 | 覆盖供应商默认 HTTP 方法 |
 | `headers` | 否 | 与供应商默认 headers 合并，同名覆盖 |
 | `idempotency_key` | 否 | 幂等键，相同 key 的重复请求返回已有记录 |
+| `callback_url` | 否 | 回调地址，投递终态时系统主动 HTTP POST 通知业务系统 |
 
 ### 查询通知状态
 
@@ -176,6 +187,7 @@ Content-Type: application/json
   "name": "crm-system",
   "url": "https://crm.company.com/api/contacts/status",
   "method": "PUT",
+  "accepted_statuses": [200, 202],
   "headers": {
     "X-API-Key": "${CRM_API_KEY}",
     "Content-Type": "application/json"
@@ -190,13 +202,23 @@ Content-Type: application/json
 → 201 Created
 ```
 
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `name` | 是 | 供应商名称 |
+| `url` | 是 | 供应商 API 地址 |
+| `method` | 否 | HTTP 方法，默认 POST |
+| `accepted_statuses` | 否 | 接受状态码列表，默认 `[200]` |
+| `headers` | 否 | 请求头 |
+| `retry` | 否 | 重试策略配置 |
+```
+
 ## Worker 投递机制
 
 Background Worker 每 500ms 轮询一次，处理流程:
 
 1. 查询 `status IN ('pending', 'failed')` 且到达重试时间的通知
 2. 并发执行 HTTP 投递（最大并发数由 `max_concurrency` 控制）
-3. 成功 (2xx): 标记 `delivered`
+3. 成功 (匹配供应商 `accepted_statuses` 列表): 标记 `delivered`
 4. 失败: 记录投递尝试，计算下次重试时间
 
 ### 重试策略
@@ -218,6 +240,21 @@ delay = min(base_delay * 2^attempt, max_delay) * (1 + random(0, 50%))
 
 超过最大重试次数后，通知进入 `dead` 状态，可通过死信重放 API 重新投递。
 
+## 回调通知机制
+
+提交通知时可传入 `callback_url`，投递到达终态时（delivered / dead），系统自动回调通知业务系统。
+
+### 回调流程
+
+1. Worker 投递完成后，若通知有 `callback_url` 且到达终态，插入 `callbacks` 表
+2. CallbackWorker（独立轮询协程，每 2s 间隔）查询待处理回调
+3. HTTP POST 到回调地址，body 格式: `{"notification_id":"...","status":"delivered"}`
+4. 成功 (2xx): 标记 completed
+5. 失败: 固定 10s 后重试，最多 3 次，超过后标记 failed 记录错误
+6. 每次回调尝试写入 `callback_attempts` 表
+
+回调重试不阻塞主 Worker 的正常投递流程。
+
 ## 项目结构
 
 ```
@@ -232,13 +269,16 @@ delay = min(base_delay * 2^attempt, max_delay) * (1 + random(0, 50%))
 │   │   ├── db.go                # 数据库初始化 & 迁移
 │   │   ├── supplier.go          # 供应商 CRUD
 │   │   ├── notification.go      # 通知 CRUD + 幂等性
-│   │   └── delivery.go          # 投递记录
+│   │   ├── delivery.go          # 投递记录
+│   │   └── callback.go          # 回调记录 CRUD
 │   ├── api/
 │   │   ├── router.go            # 路由注册
 │   │   ├── supplier.go          # 供应商管理 API
 │   │   ├── notification.go      # 提交通知 & 状态查询
 │   │   └── dead_letter.go       # 死信重放
-│   └── worker/worker.go         # 后台投递 Worker
+│   └── worker/
+│       ├── worker.go            # 后台投递 Worker
+│       └── callback_worker.go   # 回调通知 Worker
 └── docs/
     ├── requirement.md
     ├── AI_usage_explanation.md
