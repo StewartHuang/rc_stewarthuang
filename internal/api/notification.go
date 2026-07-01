@@ -19,6 +19,7 @@ type notificationRequest struct {
 	Headers        map[string]string `json:"headers"`
 	Body           json.RawMessage   `json:"body"`
 	IdempotencyKey string            `json:"idempotency_key"`
+	CallbackURL    string            `json:"callback_url"`
 }
 
 func (a *App) SubmitNotification(c *gin.Context) {
@@ -80,6 +81,9 @@ func (a *App) SubmitNotification(c *gin.Context) {
 	}
 	if req.IdempotencyKey != "" {
 		n.IdempotencyKey = &req.IdempotencyKey
+	}
+	if req.CallbackURL != "" {
+		n.CallbackURL = &req.CallbackURL
 	}
 	if err := a.Store.CreateNotification(&n); err != nil {
 		if req.IdempotencyKey != "" {

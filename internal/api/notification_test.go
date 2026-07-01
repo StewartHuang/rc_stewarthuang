@@ -122,6 +122,30 @@ func TestListNotificationsByStatus(t *testing.T) {
 	}
 }
 
+func TestSubmitNotificationWithCallbackURL(t *testing.T) {
+	app, s := newTestApp(t)
+	seedTestSupplier(t, s)
+
+	body := `{"supplier":"test-supplier","body":{"user_id":1},"callback_url":"https://biz.company.com/callback"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/notifications", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	app.Router.ServeHTTP(w, req)
+	if w.Code != 202 {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	n, err := s.GetNotification(resp["id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.CallbackURL == nil || *n.CallbackURL != "https://biz.company.com/callback" {
+		t.Fatalf("expected callback_url, got %v", n.CallbackURL)
+	}
+}
+
 func TestReplayDeadLetter(t *testing.T) {
 	app, s := newTestApp(t)
 	seedTestSupplier(t, s)
