@@ -92,13 +92,10 @@ func (w *Worker) processBatch() {
 			w.deliver(n)
 		}(notifications[i])
 	}
-	// Wait for all goroutines in this batch to finish
 	w.wg.Wait()
 }
 
 func (w *Worker) deliver(n model.Notification) {
-	now := time.Now().UTC().Format(time.RFC3339)
-
 	bodyReader := bytes.NewReader([]byte(n.Body))
 	req, err := http.NewRequestWithContext(
 		w.ctx,
@@ -107,7 +104,7 @@ func (w *Worker) deliver(n model.Notification) {
 		bodyReader,
 	)
 	if err != nil {
-		w.recordFailure(&n, nil, err.Error(), now)
+		w.recordFailure(&n, nil, err.Error())
 		return
 	}
 
@@ -119,7 +116,7 @@ func (w *Worker) deliver(n model.Notification) {
 
 	resp, err := w.client.Do(req)
 	if err != nil {
-		w.recordFailure(&n, nil, err.Error(), now)
+		w.recordFailure(&n, nil, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -128,17 +125,16 @@ func (w *Worker) deliver(n model.Notification) {
 	respStatus := resp.StatusCode
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		w.recordSuccess(&n, respStatus, string(respBody), now)
+		w.recordSuccess(&n, respStatus, string(respBody))
 	} else {
-		w.recordFailure(&n, &respStatus, string(respBody), now)
+		w.recordFailure(&n, &respStatus, string(respBody))
 	}
 }
 
-func (w *Worker) recordSuccess(n *model.Notification, status int, body string, now string) {
+func (w *Worker) recordSuccess(n *model.Notification, status int, body string) {
 	attemptNumber := n.AttemptCount + 1
 	n.AttemptCount = attemptNumber
 	n.Status = "delivered"
-	n.UpdatedAt = now
 	if err := w.store.UpdateNotification(n); err != nil {
 		log.Printf("worker: failed to update notification %s: %v", n.ID, err)
 	}
@@ -149,22 +145,21 @@ func (w *Worker) recordSuccess(n *model.Notification, status int, body string, n
 		Status:         "success",
 		ResponseStatus: &status,
 		ResponseBody:   &body,
-		AttemptedAt:    now,
+		AttemptedAt:    time.Now().UTC(),
 	}); err != nil {
 		log.Printf("worker: failed to record delivery attempt for %s: %v", n.ID, err)
 	}
 }
 
-func (w *Worker) recordFailure(n *model.Notification, status *int, errMsg string, now string) {
+func (w *Worker) recordFailure(n *model.Notification, status *int, errMsg string) {
 	n.AttemptCount++
-	n.UpdatedAt = now
 
 	attempt := &model.DeliveryAttempt{
 		NotificationID: n.ID,
 		AttemptNumber:  n.AttemptCount,
 		Status:         "failed",
 		ResponseStatus: status,
-		AttemptedAt:    now,
+		AttemptedAt:    time.Now().UTC(),
 	}
 	if status != nil {
 		attempt.ResponseBody = &errMsg
@@ -184,7 +179,7 @@ func (w *Worker) recordFailure(n *model.Notification, status *int, errMsg string
 	} else {
 		n.Status = "failed"
 		delay := calculateNextRetry(n.AttemptCount, w.getBaseDelay(*n), w.getMaxDelay(*n))
-		nextRetry := time.Now().UTC().Add(delay).Format(time.RFC3339)
+		nextRetry := time.Now().UTC().Add(delay)
 		n.NextRetryAt = &nextRetry
 	}
 	if err := w.store.UpdateNotification(n); err != nil {

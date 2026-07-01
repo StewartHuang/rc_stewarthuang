@@ -5,19 +5,19 @@ import (
 	"time"
 
 	"rc_stewarthuang/internal/model"
+
+	"gorm.io/gorm"
 )
 
 func TestCreateNotification(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	n := &model.Notification{
 		ID: "notif-1", Supplier: "test-supplier",
 		URL: "https://example.com/notify", Method: "POST",
 		Headers: `{"Content-Type": "application/json"}`,
 		Body:    `{"user_id": 123}`,
 		Status:  "pending", AttemptCount: 0, MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.CreateNotification(n); err != nil {
 		t.Fatalf("CreateNotification failed: %v", err)
@@ -27,15 +27,13 @@ func TestCreateNotification(t *testing.T) {
 func TestCreateNotificationIdempotency(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	key := "idem-key-1"
 	n1 := &model.Notification{
 		ID: "n1", Supplier: "test-supplier",
 		URL: "https://example.com/n", Method: "POST",
 		Headers: "{}", Body: "{}",
-		IdempotencyKey: key,
-		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
+		IdempotencyKey: &key,
+		Status:         "pending", MaxAttempts: 15,
 	}
 	if err := s.CreateNotification(n1); err != nil {
 		t.Fatal(err)
@@ -44,9 +42,8 @@ func TestCreateNotificationIdempotency(t *testing.T) {
 		ID: "n2", Supplier: "test-supplier",
 		URL: "https://example.com/n", Method: "POST",
 		Headers: "{}", Body: "{}",
-		IdempotencyKey: key,
-		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
+		IdempotencyKey: &key,
+		Status:         "pending", MaxAttempts: 15,
 	}
 	err := s.CreateNotification(n2)
 	if err == nil {
@@ -57,13 +54,11 @@ func TestCreateNotificationIdempotency(t *testing.T) {
 func TestGetNotification(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreateNotification(&model.Notification{
 		ID: "get-test", Supplier: "test-supplier",
 		URL: "https://example.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
 	})
 	got, err := s.GetNotification("get-test")
 	if err != nil {
@@ -77,37 +72,17 @@ func TestGetNotification(t *testing.T) {
 func TestGetNotificationNotFound(t *testing.T) {
 	s := newTestStore(t)
 	_, err := s.GetNotification("nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent notification")
+	if err != gorm.ErrRecordNotFound {
+		t.Fatalf("expected ErrRecordNotFound, got %v", err)
 	}
 }
 
 func TestListNotificationsByStatus(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateNotification(&model.Notification{
-		ID: "n1", Supplier: "test-supplier",
-		URL: "https://a.com", Method: "POST",
-		Headers: "{}", Body: "{}",
-		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
-	})
-	s.CreateNotification(&model.Notification{
-		ID: "n2", Supplier: "test-supplier",
-		URL: "https://b.com", Method: "POST",
-		Headers: "{}", Body: "{}",
-		Status: "delivered", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
-	})
-	s.CreateNotification(&model.Notification{
-		ID: "n3", Supplier: "test-supplier",
-		URL: "https://c.com", Method: "POST",
-		Headers: "{}", Body: "{}",
-		Status: "dead", MaxAttempts: 15,
-		DeadReason: strPtr("max retries exceeded"),
-		CreatedAt: now, UpdatedAt: now,
-	})
+	s.CreateNotification(&model.Notification{ID: "n1", Supplier: "test-supplier", URL: "https://a.com", Method: "POST", Headers: "{}", Body: "{}", Status: "pending", MaxAttempts: 15})
+	s.CreateNotification(&model.Notification{ID: "n2", Supplier: "test-supplier", URL: "https://b.com", Method: "POST", Headers: "{}", Body: "{}", Status: "delivered", MaxAttempts: 15})
+	s.CreateNotification(&model.Notification{ID: "n3", Supplier: "test-supplier", URL: "https://c.com", Method: "POST", Headers: "{}", Body: "{}", Status: "dead", MaxAttempts: 15, DeadReason: strPtr("max retries exceeded")})
 
 	pending, err := s.ListNotificationsByStatus("pending")
 	if err != nil {
@@ -129,18 +104,13 @@ func TestListNotificationsByStatus(t *testing.T) {
 func TestUpdateNotification(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreateNotification(&model.Notification{
 		ID: "upd-test", Supplier: "test-supplier",
 		URL: "https://example.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
 	})
-	nt := &model.Notification{
-		ID: "upd-test", Status: "delivered",
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-	}
+	nt := &model.Notification{ID: "upd-test", Status: "delivered"}
 	if err := s.UpdateNotification(nt); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +123,6 @@ func TestUpdateNotification(t *testing.T) {
 func TestFindPendingNotifications(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 
 	// pending with no next_retry_at (immediately eligible)
 	s.CreateNotification(&model.Notification{
@@ -161,18 +130,15 @@ func TestFindPendingNotifications(t *testing.T) {
 		URL: "https://a.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
 	})
 	// failed with past next_retry_at (eligible)
-	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	past := time.Now().UTC().Add(-time.Minute)
 	s.CreateNotification(&model.Notification{
 		ID: "n2", Supplier: "test-supplier",
 		URL: "https://b.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "failed", MaxAttempts: 15,
-		AttemptCount: 1,
-		NextRetryAt: &past,
-		CreatedAt: now, UpdatedAt: now,
+		AttemptCount: 1, NextRetryAt: &past,
 	})
 	// delivered (not eligible)
 	s.CreateNotification(&model.Notification{
@@ -180,7 +146,6 @@ func TestFindPendingNotifications(t *testing.T) {
 		URL: "https://c.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "delivered", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
 	})
 
 	results, err := s.FindPendingNotifications(10)
@@ -195,7 +160,6 @@ func TestFindPendingNotifications(t *testing.T) {
 func TestReplayNotification(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	reason := "max retries exceeded"
 	s.CreateNotification(&model.Notification{
 		ID: "replay-test", Supplier: "test-supplier",
@@ -203,7 +167,6 @@ func TestReplayNotification(t *testing.T) {
 		Headers: "{}", Body: "{}",
 		Status: "dead", MaxAttempts: 15,
 		AttemptCount: 15, DeadReason: &reason,
-		CreatedAt: now, UpdatedAt: now,
 	})
 	if err := s.ReplayNotification("replay-test"); err != nil {
 		t.Fatal(err)
@@ -223,20 +186,18 @@ func TestReplayNotification(t *testing.T) {
 func TestCreateDeliveryAttempt(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreateNotification(&model.Notification{
 		ID: "da-test", Supplier: "test-supplier",
 		URL: "https://example.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
 	})
 	da := &model.DeliveryAttempt{
 		NotificationID: "da-test",
 		AttemptNumber:  1,
 		Status:         "success",
 		ResponseStatus: intPtr(200),
-		AttemptedAt:    time.Now().UTC().Format(time.RFC3339),
+		AttemptedAt:    time.Now().UTC(),
 	}
 	if err := s.CreateDeliveryAttempt(da); err != nil {
 		t.Fatal(err)
@@ -249,20 +210,18 @@ func TestCreateDeliveryAttempt(t *testing.T) {
 func TestListDeliveryAttempts(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreateNotification(&model.Notification{
 		ID: "list-da", Supplier: "test-supplier",
 		URL: "https://example.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
 	})
 	for i := 1; i <= 3; i++ {
 		s.CreateDeliveryAttempt(&model.DeliveryAttempt{
 			NotificationID: "list-da",
 			AttemptNumber:  i,
 			Status:         "failed",
-			AttemptedAt:    now,
+			AttemptedAt:    time.Now().UTC(),
 		})
 	}
 	attempts, err := s.ListDeliveryAttempts("list-da")
@@ -272,18 +231,4 @@ func TestListDeliveryAttempts(t *testing.T) {
 	if len(attempts) != 3 {
 		t.Fatalf("expected 3 attempts, got %d", len(attempts))
 	}
-}
-
-func intPtr(i int) *int              { return &i }
-func strPtr(s string) *string        { return &s }
-
-func seedSupplier(t *testing.T, s *Store) {
-	t.Helper()
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "test-supplier", URL: "https://example.com", Method: "POST",
-		Headers: "{}", Enabled: true,
-		RetryMaxAttempts: 15, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 240000,
-		CreatedAt: now, UpdatedAt: now,
-	})
 }

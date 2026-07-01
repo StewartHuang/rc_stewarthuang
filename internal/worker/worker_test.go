@@ -3,7 +3,6 @@ package worker
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -14,30 +13,20 @@ import (
 
 func newTestStore(t *testing.T) *db.Store {
 	t.Helper()
-	f, err := os.CreateTemp("", "delivery-test-*.db")
+	s, err := db.NewStore(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
-	s, err := db.NewStore(f.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		s.Close()
-		os.Remove(f.Name())
-	})
+	t.Cleanup(func() { s.Close() })
 	return s
 }
 
 func seedTestData(t *testing.T, s *db.Store) {
 	t.Helper()
-	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreateSupplier(&model.Supplier{
 		Name: "test-sup", URL: "http://localhost:19999/notify", Method: "POST",
 		Headers: `{"Content-Type":"application/json"}`, Enabled: true,
 		RetryMaxAttempts: 3, RetryBaseDelayMs: 100, RetryMaxDelayMs: 1000,
-		CreatedAt: now, UpdatedAt: now,
 	})
 	s.CreateNotification(&model.Notification{
 		ID: "n1", Supplier: "test-sup",
@@ -45,7 +34,6 @@ func seedTestData(t *testing.T, s *db.Store) {
 		Headers: `{"Content-Type":"application/json"}`,
 		Body:    `{"user_id":1}`,
 		Status:  "pending", MaxAttempts: 3,
-		CreatedAt: now, UpdatedAt: now,
 	})
 }
 
@@ -53,17 +41,14 @@ func TestWorkerDeliverSuccess(t *testing.T) {
 	s := newTestStore(t)
 	seedTestData(t, s)
 
-	// Start a test server that returns 200
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer server.Close()
 
-	// Update the notification URL to point to our test server
 	n, _ := s.GetNotification("n1")
 	n.URL = server.URL
-	n.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.UpdateNotification(n)
 
 	cfg := &config.WorkerConfig{
@@ -91,19 +76,16 @@ func TestWorkerDeliverSuccess(t *testing.T) {
 
 func TestWorkerDeliverFailureThenDead(t *testing.T) {
 	s := newTestStore(t)
-	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreateSupplier(&model.Supplier{
 		Name: "fail-sup", URL: "http://localhost:19998/notify", Method: "POST",
-		Headers: `{}`, Enabled: true,
+		Headers: "{}", Enabled: true,
 		RetryMaxAttempts: 2, RetryBaseDelayMs: 50, RetryMaxDelayMs: 200,
-		CreatedAt: now, UpdatedAt: now,
 	})
 	s.CreateNotification(&model.Notification{
 		ID: "n2", Supplier: "fail-sup",
 		URL: "http://localhost:19998/notify", Method: "POST",
 		Headers: "{}", Body: `{}`,
 		Status: "pending", MaxAttempts: 2,
-		CreatedAt: now, UpdatedAt: now,
 	})
 
 	cfg := &config.WorkerConfig{

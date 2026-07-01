@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,33 +13,18 @@ import (
 
 func newTestApp(t *testing.T) (*App, *db.Store) {
 	t.Helper()
-	f, err := os.CreateTemp("", "delivery-test-*.db")
+	store, err := db.NewStore(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
-	store, err := db.NewStore(f.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		store.Close()
-		os.Remove(f.Name())
-	})
+	t.Cleanup(func() { store.Close() })
 	return NewApp(store), store
 }
 
 func TestListSuppliers(t *testing.T) {
 	app, s := newTestApp(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "s1", URL: "https://a.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
-	s.CreateSupplier(&model.Supplier{
-		Name: "s2", URL: "https://b.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
+	s.CreateSupplier(&model.Supplier{Name: "s1", URL: "https://a.com", Method: "POST", Headers: "{}", Enabled: true})
+	s.CreateSupplier(&model.Supplier{Name: "s2", URL: "https://b.com", Method: "POST", Headers: "{}", Enabled: true})
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/v1/suppliers", nil)
@@ -58,12 +42,10 @@ func TestListSuppliers(t *testing.T) {
 
 func TestGetSupplier(t *testing.T) {
 	app, s := newTestApp(t)
-	now := time.Now().UTC().Format(time.RFC3339)
 	s.CreateSupplier(&model.Supplier{
 		Name: "test-me", URL: "https://test.com", Method: "POST",
 		Headers: `{"X-Key":"val"}`, Enabled: true,
 		RetryMaxAttempts: 10, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 60000,
-		CreatedAt: now, UpdatedAt: now,
 	})
 
 	w := httptest.NewRecorder()
@@ -104,11 +86,7 @@ func TestCreateSupplier(t *testing.T) {
 
 func TestCreateSupplierDuplicate(t *testing.T) {
 	app, s := newTestApp(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "dup", URL: "https://dup.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
+	s.CreateSupplier(&model.Supplier{Name: "dup", URL: "https://dup.com", Method: "POST", Headers: "{}", Enabled: true})
 	body := `{"name":"dup","url":"https://dup.com","method":"POST"}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/v1/suppliers", strings.NewReader(body))
@@ -121,11 +99,7 @@ func TestCreateSupplierDuplicate(t *testing.T) {
 
 func TestUpdateSupplier(t *testing.T) {
 	app, s := newTestApp(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "upd", URL: "https://old.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
+	s.CreateSupplier(&model.Supplier{Name: "upd", URL: "https://old.com", Method: "POST", Headers: "{}", Enabled: true})
 	body := `{"name":"upd","url":"https://new.com","method":"PUT"}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("PUT", "/api/v1/suppliers/upd", strings.NewReader(body))
@@ -138,11 +112,7 @@ func TestUpdateSupplier(t *testing.T) {
 
 func TestDeleteSupplier(t *testing.T) {
 	app, s := newTestApp(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "del", URL: "https://del.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
+	s.CreateSupplier(&model.Supplier{Name: "del", URL: "https://del.com", Method: "POST", Headers: "{}", Enabled: true})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("DELETE", "/api/v1/suppliers/del", nil)
 	app.Router.ServeHTTP(w, req)
@@ -160,3 +130,25 @@ func TestDeleteSupplierNotFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
 }
+
+func seedTestSupplier(t *testing.T, s *db.Store) {
+	t.Helper()
+	s.CreateSupplier(&model.Supplier{
+		Name: "test-supplier", URL: "https://example.com/api", Method: "POST",
+		Headers: `{"Content-Type":"application/json"}`, Enabled: true,
+		RetryMaxAttempts: 15, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 240000,
+	})
+}
+
+func submitTestNotification(t *testing.T, s *db.Store, id string) {
+	t.Helper()
+	s.CreateNotification(&model.Notification{
+		ID: id, Supplier: "test-supplier",
+		URL: "https://example.com/api", Method: "POST",
+		Headers: `{"Content-Type":"application/json"}`,
+		Body:    `{"user_id":1}`,
+		Status:  "pending", MaxAttempts: 15,
+	})
+}
+
+func timePtr(t time.Time) *time.Time { return &t }

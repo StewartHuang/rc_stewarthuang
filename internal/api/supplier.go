@@ -9,6 +9,7 @@ import (
 	"rc_stewarthuang/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type supplierRequest struct {
@@ -37,7 +38,11 @@ func (a *App) ListSuppliers(c *gin.Context) {
 func (a *App) GetSupplier(c *gin.Context) {
 	sup, err := a.Store.GetSupplier(c.Param("name"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("supplier %q not found", c.Param("name"))})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, sup)
@@ -62,12 +67,11 @@ func (a *App) CreateSupplier(c *gin.Context) {
 		b, _ := json.Marshal(req.Headers)
 		headersJSON = string(b)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
 	sup := model.Supplier{
 		Name: req.Name, URL: req.URL, Method: method,
 		Headers:          headersJSON,
 		RetryMaxAttempts: 15, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 240000,
-		Enabled: true, CreatedAt: now, UpdatedAt: now,
+		Enabled: true,
 	}
 	if req.Retry != nil {
 		if req.Retry.MaxAttempts > 0 {
@@ -91,7 +95,11 @@ func (a *App) UpdateSupplier(c *gin.Context) {
 	name := c.Param("name")
 	existing, err := a.Store.GetSupplier(name)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("supplier %q not found", name)})
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("supplier %q not found", name)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	var req supplierRequest
@@ -120,7 +128,6 @@ func (a *App) UpdateSupplier(c *gin.Context) {
 			existing.RetryMaxDelayMs = int(d.Milliseconds())
 		}
 	}
-	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := a.Store.UpdateSupplier(existing); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -130,7 +137,11 @@ func (a *App) UpdateSupplier(c *gin.Context) {
 
 func (a *App) DeleteSupplier(c *gin.Context) {
 	if err := a.Store.DeleteSupplier(c.Param("name")); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("supplier %q not found", c.Param("name"))})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.Status(http.StatusNoContent)

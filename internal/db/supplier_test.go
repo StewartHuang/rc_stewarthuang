@@ -1,29 +1,33 @@
 package db
 
 import (
-	"os"
 	"testing"
-	"time"
 
 	"rc_stewarthuang/internal/model"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	f, err := os.CreateTemp("", "delivery-test-*.db")
+	s, err := NewStore(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
-	s, err := NewStore(f.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		s.Close()
-		os.Remove(f.Name())
-	})
+	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func seedSupplier(t *testing.T, s *Store) {
+	t.Helper()
+	s.CreateSupplier(&model.Supplier{
+		Name:             "test-supplier",
+		URL:              "https://example.com",
+		Method:           "POST",
+		Headers:          "{}",
+		Enabled:          true,
+		RetryMaxAttempts: 15,
+		RetryBaseDelayMs: 1000,
+		RetryMaxDelayMs:  240000,
+	})
 }
 
 func TestCreateSupplier(t *testing.T) {
@@ -37,8 +41,6 @@ func TestCreateSupplier(t *testing.T) {
 		RetryBaseDelayMs: 1000,
 		RetryMaxDelayMs:  60000,
 		Enabled:          true,
-		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
-		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 	err := s.CreateSupplier(sup)
 	if err != nil {
@@ -59,20 +61,11 @@ func TestGetSupplierNotFound(t *testing.T) {
 
 func TestCreateDuplicateSupplier(t *testing.T) {
 	s := newTestStore(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	sup := &model.Supplier{
-		Name: "dup", URL: "https://a.com", Method: "POST",
-		Headers: "{}", Enabled: true,
-		CreatedAt: now, UpdatedAt: now,
-	}
+	sup := &model.Supplier{Name: "dup", URL: "https://a.com", Method: "POST", Headers: "{}", Enabled: true}
 	if err := s.CreateSupplier(sup); err != nil {
 		t.Fatal(err)
 	}
-	sup2 := &model.Supplier{
-		Name: "dup", URL: "https://b.com", Method: "POST",
-		Headers: "{}", Enabled: true,
-		CreatedAt: now, UpdatedAt: now,
-	}
+	sup2 := &model.Supplier{Name: "dup", URL: "https://b.com", Method: "POST", Headers: "{}", Enabled: true}
 	if err := s.CreateSupplier(sup2); err == nil {
 		t.Fatal("expected error for duplicate supplier name")
 	}
@@ -80,15 +73,8 @@ func TestCreateDuplicateSupplier(t *testing.T) {
 
 func TestListSuppliers(t *testing.T) {
 	s := newTestStore(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "s1", URL: "https://a.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
-	s.CreateSupplier(&model.Supplier{
-		Name: "s2", URL: "https://b.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
+	s.CreateSupplier(&model.Supplier{Name: "s1", URL: "https://a.com", Method: "POST", Headers: "{}", Enabled: true})
+	s.CreateSupplier(&model.Supplier{Name: "s2", URL: "https://b.com", Method: "POST", Headers: "{}", Enabled: true})
 	suppliers, err := s.ListSuppliers()
 	if err != nil {
 		t.Fatal(err)
@@ -100,14 +86,9 @@ func TestListSuppliers(t *testing.T) {
 
 func TestUpdateSupplier(t *testing.T) {
 	s := newTestStore(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	sup := &model.Supplier{
-		Name: "upd", URL: "https://old.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	}
+	sup := &model.Supplier{Name: "upd", URL: "https://old.com", Method: "POST", Headers: "{}", Enabled: true}
 	s.CreateSupplier(sup)
 	sup.URL = "https://new.com"
-	sup.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.UpdateSupplier(sup); err != nil {
 		t.Fatal(err)
 	}
@@ -119,11 +100,7 @@ func TestUpdateSupplier(t *testing.T) {
 
 func TestDeleteSupplier(t *testing.T) {
 	s := newTestStore(t)
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "del", URL: "https://del.com", Method: "POST",
-		Headers: "{}", Enabled: true, CreatedAt: now, UpdatedAt: now,
-	})
+	s.CreateSupplier(&model.Supplier{Name: "del", URL: "https://del.com", Method: "POST", Headers: "{}", Enabled: true})
 	if err := s.DeleteSupplier("del"); err != nil {
 		t.Fatal(err)
 	}
@@ -135,14 +112,11 @@ func TestDeleteSupplier(t *testing.T) {
 
 func TestSyncSuppliersFromConfig(t *testing.T) {
 	s := newTestStore(t)
-	now := time.Now().UTC().Format(time.RFC3339)
 	entries := []model.Supplier{
 		{Name: "a", URL: "https://a.com", Method: "POST", Headers: "{}",
-			RetryMaxAttempts: 10, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 60000,
-			Enabled: true, CreatedAt: now, UpdatedAt: now},
+			RetryMaxAttempts: 10, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 60000, Enabled: true},
 		{Name: "b", URL: "https://b.com", Method: "POST", Headers: "{}",
-			RetryMaxAttempts: 5, RetryBaseDelayMs: 2000, RetryMaxDelayMs: 120000,
-			Enabled: true, CreatedAt: now, UpdatedAt: now},
+			RetryMaxAttempts: 5, RetryBaseDelayMs: 2000, RetryMaxDelayMs: 120000, Enabled: true},
 	}
 	if err := s.SyncSuppliersFromConfig(entries); err != nil {
 		t.Fatal(err)
@@ -151,8 +125,10 @@ func TestSyncSuppliersFromConfig(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("expected 2 suppliers, got %d", len(all))
 	}
-	// Sync again with same data should be idempotent
 	if err := s.SyncSuppliersFromConfig(entries); err != nil {
 		t.Fatal(err)
 	}
 }
+
+func intPtr(i int) *int       { return &i }
+func strPtr(s string) *string { return &s }

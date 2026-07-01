@@ -35,9 +35,7 @@ func main() {
 	}
 	defer store.Close()
 
-	// Sync suppliers from config to DB
 	suppliers := make([]model.Supplier, 0, len(cfg.Suppliers))
-	now := time.Now().UTC().Format(time.RFC3339)
 	for _, sc := range cfg.Suppliers {
 		headersJSON := "{}"
 		if len(sc.Headers) > 0 {
@@ -59,8 +57,6 @@ func main() {
 			RetryBaseDelayMs: baseDelay,
 			RetryMaxDelayMs:  maxDelay,
 			Enabled:          true,
-			CreatedAt:        now,
-			UpdatedAt:        now,
 		})
 	}
 	if err := store.SyncSuppliersFromConfig(suppliers); err != nil {

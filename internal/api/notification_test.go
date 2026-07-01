@@ -5,35 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"rc_stewarthuang/internal/db"
 	"rc_stewarthuang/internal/model"
 )
-
-func seedTestSupplier(t *testing.T, s *db.Store) {
-	t.Helper()
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateSupplier(&model.Supplier{
-		Name: "test-supplier", URL: "https://example.com/api", Method: "POST",
-		Headers: `{"Content-Type":"application/json"}`, Enabled: true,
-		RetryMaxAttempts: 15, RetryBaseDelayMs: 1000, RetryMaxDelayMs: 240000,
-		CreatedAt: now, UpdatedAt: now,
-	})
-}
-
-func (a *App) submitTestNotification(t *testing.T, s *db.Store, id string) {
-	t.Helper()
-	now := time.Now().UTC().Format(time.RFC3339)
-	s.CreateNotification(&model.Notification{
-		ID: id, Supplier: "test-supplier",
-		URL: "https://example.com/api", Method: "POST",
-		Headers: `{"Content-Type":"application/json"}`,
-		Body:    `{"user_id":1}`,
-		Status:  "pending", MaxAttempts: 15,
-		CreatedAt: now, UpdatedAt: now,
-	})
-}
 
 func TestSubmitNotification(t *testing.T) {
 	app, s := newTestApp(t)
@@ -114,7 +88,7 @@ func TestSubmitNotificationSupplierNotFound(t *testing.T) {
 func TestGetNotification(t *testing.T) {
 	app, s := newTestApp(t)
 	seedTestSupplier(t, s)
-	app.submitTestNotification(t, s, "n1")
+	submitTestNotification(t, s, "n1")
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/v1/notifications/n1", nil)
@@ -132,8 +106,8 @@ func TestGetNotification(t *testing.T) {
 func TestListNotificationsByStatus(t *testing.T) {
 	app, s := newTestApp(t)
 	seedTestSupplier(t, s)
-	app.submitTestNotification(t, s, "n1")
-	app.submitTestNotification(t, s, "n2")
+	submitTestNotification(t, s, "n1")
+	submitTestNotification(t, s, "n2")
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/v1/notifications?status=pending", nil)
@@ -151,7 +125,6 @@ func TestListNotificationsByStatus(t *testing.T) {
 func TestReplayDeadLetter(t *testing.T) {
 	app, s := newTestApp(t)
 	seedTestSupplier(t, s)
-	now := time.Now().UTC().Format(time.RFC3339)
 	reason := "max retries"
 	s.CreateNotification(&model.Notification{
 		ID: "dead-1", Supplier: "test-supplier",
@@ -159,7 +132,6 @@ func TestReplayDeadLetter(t *testing.T) {
 		Headers: "{}", Body: "{}",
 		Status: "dead", MaxAttempts: 15,
 		AttemptCount: 15, DeadReason: &reason,
-		CreatedAt: now, UpdatedAt: now,
 	})
 
 	w := httptest.NewRecorder()

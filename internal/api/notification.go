@@ -4,21 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"rc_stewarthuang/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type notificationRequest struct {
-	Supplier       string                 `json:"supplier"`
-	URL            string                 `json:"url"`
-	Method         string                 `json:"method"`
-	Headers        map[string]string      `json:"headers"`
-	Body           json.RawMessage `json:"body"`
-	IdempotencyKey string                 `json:"idempotency_key"`
+	Supplier       string            `json:"supplier"`
+	URL            string            `json:"url"`
+	Method         string            `json:"method"`
+	Headers        map[string]string `json:"headers"`
+	Body           json.RawMessage   `json:"body"`
+	IdempotencyKey string            `json:"idempotency_key"`
 }
 
 func (a *App) SubmitNotification(c *gin.Context) {
@@ -46,7 +46,6 @@ func (a *App) SubmitNotification(c *gin.Context) {
 		}
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
 	notifID := uuid.New().String()
 
 	url := sup.URL
@@ -76,10 +75,11 @@ func (a *App) SubmitNotification(c *gin.Context) {
 		ID: notifID, Supplier: req.Supplier,
 		URL: url, Method: method,
 		Headers: headersJSON, Body: bodyJSON,
-		IdempotencyKey: req.IdempotencyKey,
 		Status: "pending", AttemptCount: 0,
 		MaxAttempts: sup.RetryMaxAttempts,
-		CreatedAt:   now, UpdatedAt: now,
+	}
+	if req.IdempotencyKey != "" {
+		n.IdempotencyKey = &req.IdempotencyKey
 	}
 	if err := a.Store.CreateNotification(&n); err != nil {
 		if req.IdempotencyKey != "" {
@@ -98,7 +98,11 @@ func (a *App) SubmitNotification(c *gin.Context) {
 func (a *App) GetNotification(c *gin.Context) {
 	n, err := a.Store.GetNotification(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, n)
