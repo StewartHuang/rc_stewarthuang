@@ -82,6 +82,13 @@ func (a *App) SubmitNotification(c *gin.Context) {
 		CreatedAt:   now, UpdatedAt: now,
 	}
 	if err := a.Store.CreateNotification(&n); err != nil {
+		if req.IdempotencyKey != "" {
+			existing, lookupErr := a.Store.FindByIdempotencyKey(req.IdempotencyKey)
+			if lookupErr == nil && existing != nil {
+				c.JSON(http.StatusOK, gin.H{"id": existing.ID, "status": "accepted"})
+				return
+			}
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create notification"})
 		return
 	}

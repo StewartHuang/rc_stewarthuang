@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -73,6 +74,7 @@ func (w *Worker) Stop() {
 func (w *Worker) processBatch() {
 	notifications, err := w.store.FindPendingNotifications(w.cfg.MaxConcurrency)
 	if err != nil {
+		log.Printf("worker: failed to find pending notifications: %v", err)
 		return
 	}
 
@@ -133,19 +135,24 @@ func (w *Worker) deliver(n model.Notification) {
 }
 
 func (w *Worker) recordSuccess(n *model.Notification, status int, body string, now string) {
-	n.AttemptCount++
+	attemptNumber := n.AttemptCount + 1
+	n.AttemptCount = attemptNumber
 	n.Status = "delivered"
 	n.UpdatedAt = now
-	w.store.UpdateNotification(n)
+	if err := w.store.UpdateNotification(n); err != nil {
+		log.Printf("worker: failed to update notification %s: %v", n.ID, err)
+	}
 
-	w.store.CreateDeliveryAttempt(&model.DeliveryAttempt{
+	if err := w.store.CreateDeliveryAttempt(&model.DeliveryAttempt{
 		NotificationID: n.ID,
-		AttemptNumber:  n.AttemptCount + 1,
+		AttemptNumber:  attemptNumber,
 		Status:         "success",
 		ResponseStatus: &status,
 		ResponseBody:   &body,
 		AttemptedAt:    now,
-	})
+	}); err != nil {
+		log.Printf("worker: failed to record delivery attempt for %s: %v", n.ID, err)
+	}
 }
 
 func (w *Worker) recordFailure(n *model.Notification, status *int, errMsg string, now string) {
@@ -157,14 +164,18 @@ func (w *Worker) recordFailure(n *model.Notification, status *int, errMsg string
 		AttemptNumber:  n.AttemptCount,
 		Status:         "failed",
 		ResponseStatus: status,
-		ErrorMessage:   &errMsg,
 		AttemptedAt:    now,
 	}
 	if status != nil {
-		body := ""
-		attempt.ResponseBody = &body
+		attempt.ResponseBody = &errMsg
+		desc := fmt.Sprintf("HTTP %d", *status)
+		attempt.ErrorMessage = &desc
+	} else {
+		attempt.ErrorMessage = &errMsg
 	}
-	w.store.CreateDeliveryAttempt(attempt)
+	if err := w.store.CreateDeliveryAttempt(attempt); err != nil {
+		log.Printf("worker: failed to record delivery attempt for %s: %v", n.ID, err)
+	}
 
 	if n.AttemptCount >= n.MaxAttempts {
 		n.Status = "dead"
@@ -176,7 +187,9 @@ func (w *Worker) recordFailure(n *model.Notification, status *int, errMsg string
 		nextRetry := time.Now().UTC().Add(delay).Format(time.RFC3339)
 		n.NextRetryAt = &nextRetry
 	}
-	w.store.UpdateNotification(n)
+	if err := w.store.UpdateNotification(n); err != nil {
+		log.Printf("worker: failed to update notification %s: %v", n.ID, err)
+	}
 }
 
 func calculateNextRetry(attemptCount int, baseDelayMs int, maxDelayMs int) time.Duration {
