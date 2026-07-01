@@ -10,6 +10,7 @@ OpenCode + Superpowers plugin + DeepSeek V4 Flash
    - 在人工对系统方案设计文档时做出的决策和纠正时自动写入到该文档
 2. 详细方案+代码实现
    - 由 superpowers 在确定 SPEC 后使用 SubAgent 模式完成首版代码实现
+3. 代码测试：生成单元测试代码，并验证结果
 
 # AI 给出过哪些你没有采纳的建议
 1. 系统设计环节中在 DB 设计时使用了 外键 和 CHECK 功能
@@ -41,7 +42,7 @@ OpenCode + Superpowers plugin + DeepSeek V4 Flash
 > B) PostgreSQL — 需要额外部署，面向高并发/大规模场景
 > C) BoltDB/bbolt — 嵌入式 KV 存储，零依赖，读写性能好但查询能力有限
 
-**最终决策：A) SQLite（零依赖，纯 Go 驱动 modernc.org/sqlite，无需 CGO）**
+**最终决策：A) SQLite（零依赖）**
 
 当前只需要实现 MVP，为了方便测试和验证，使用单文件的 SQLite 是最佳选择，后续进入生产环境切换到 PG 或 MySQL 都比较容易
 
