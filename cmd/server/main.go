@@ -71,6 +71,8 @@ func main() {
 	app := api.NewApp(store)
 	w := worker.NewWorker(store, &cfg.Worker)
 	go w.Start()
+	cw := worker.NewCallbackWorker(store, &cfg.Worker)
+	go cw.Start()
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
@@ -90,6 +92,7 @@ func main() {
 
 	log.Println("shutting down...")
 	w.Stop()
+	cw.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
