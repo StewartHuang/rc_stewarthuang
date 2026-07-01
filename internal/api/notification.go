@@ -17,7 +17,7 @@ type notificationRequest struct {
 	URL            string                 `json:"url"`
 	Method         string                 `json:"method"`
 	Headers        map[string]string      `json:"headers"`
-	Body           map[string]interface{} `json:"body"`
+	Body           json.RawMessage `json:"body"`
 	IdempotencyKey string                 `json:"idempotency_key"`
 }
 
@@ -68,9 +68,8 @@ func (a *App) SubmitNotification(c *gin.Context) {
 		headersJSON = string(b)
 	}
 	bodyJSON := "{}"
-	if req.Body != nil {
-		b, _ := json.Marshal(req.Body)
-		bodyJSON = string(b)
+	if len(req.Body) > 0 {
+		bodyJSON = string(req.Body)
 	}
 
 	n := model.Notification{
