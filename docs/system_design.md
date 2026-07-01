@@ -462,7 +462,7 @@ suppliers:
 
 演进内容：
 
-- 存储切换为 PostgreSQL，解决 SQLite 写入并发上限，并且提供事务性写入读取能力，避免并发请求时出现数据竞争。
+- 存储切换为 PostgreSQL，解决 SQLite 写入并发上限
 - 服务拆分为 API Server 和 Worker 两个独立部署单元
 - API 负责接收请求写入 DB，Worker 负责轮询投递
 
@@ -544,12 +544,191 @@ WHERE id = 'n1' AND version = 3;
 - 需要严格的消息顺序保证或更多消息语义
 - 需要跨可用区部署
 
-演进内容：
+##### 为什么选择 RabbitMQ 而非 Kafka
 
-- 引入 Kafka/RabbitMQ 作为消息中间件 （这种时候我倾向与选择 RabbitMQ，原生对于死信队列支持更好）
-- API 将通知写入 MQ 后立即返回
-- Worker 从 MQ 消费消息进行投递，如果有失败消息丢入死信队列
-- DB 退化为查询和记录存储，不再承担 pending 消息轮询职责
+RabbitMQ 更适合本服务的消息投递场景，具体原因如下（针对本服务的消息模型）：
+
+| 维度 | RabbitMQ | Apache Kafka |
+|------|----------|--------------|
+| **死信队列（DLX）** | 原生支持，Exchange 级配置，队列绑定即可 | 需通过 topic 重定向或 Stream 的 compact 策略模拟 |
+| **消息存活时间（TTL）** | 队列/消息级别原生支持 | 无原生 TTL，需应用层或配置 retention.ms |
+| **延迟投递（Delayed Message）** | 通过延迟交换机（rabbitmq_delayed_message_exchange）支持 | 需依赖时间戳轮询处理 |
+| **消费确认（ACK）** | 支持推模式消费且单条 ACK，天然匹配 Worker"取一条→投递→ACK"模式 | 需维护 offset，更适用于批量流式消费 |
+| **重试机制** | 死信后 re-route 回原队列（DLX + TTL）实现重试，完全在 broker 侧完成 | 需重投到原 topic，配合 consumer seek 实现，应用负担更重 |
+| **消息语义** | 至少一次投递（ACK+重投） | 支持精确一次（需配合幂等 Producer 和 Transaction） |
+| **运维复杂度** | 单节点可部署（erlang 一致 Hash），配置简单 | 需要 Zookeeper/Kraft，最少 3 节点才能算生产集群 |
+| **适合场景** | 任务队列、异步 RPC、事件通知、死信重试 | 日志聚合、流计算、事件溯源、大数据管道 |
+
+总结：RabbitMQ 的 **Exchange → Queue → Binding** 模型天然匹配"提交通知 → 投递队列 → 死信重试"的消息流转路径；原生死信交换机（DLX）和 TTL 可以在 broker 层面完成重试延迟，Worker 只需要单条 ACK 即可控制消费进度。
+
+##### 架构图
+
+```
+┌──────────────┐
+│  业务系统 A   │         API 层 (无状态, 可多实例)
+│  业务系统 B   │───┐ ┌──────────────────────────────────────────────┐
+│  业务系统 C   │   │ │ POST /api/v1/notifications                  │
+└──────────────┘   │ │  → 校验 supplier / body / callback_url      │
+                   │ │  → DB 写入 notification + delivery_history  │
+                   │ │  → 投递进度写入 RabbitMQ                    │
+                   │ └──────────────────────────────────────────────┘
+                   │                     │
+                   │                     ▼
+                   │         ┌─────────────────────┐
+                   │         │   RabbitMQ Broker    │
+                   │         │  ┌─────────────────┐ │
+                   │         │  │  delivery.exchange─────────[direct]
+                   │         │  └────────┬────────┘ │
+                   │         │           │          │
+                   │         │  ┌────────▼────────┐ │
+                   │         │  │ delivery.queue   │──┐
+                   │         │  │ (可多 consumer)  │  │  Worker 从队列消费,
+                   │         │  └─────────────────┘  │  无需轮询 DB
+                   │         │           │           │
+                   │         │  ┌────────▼────────┐ │
+                   │         │  │ callback.exchange─────[direct]
+                   │         │  └────────┬────────┘ │
+                   │         │           │          │
+                   │         │  ┌────────▼────────┐ │
+                   │         │  │ callback.queue   │─┘
+                   │         │  │ (回调通知)       │
+                   │         │  └─────────────────┘ │
+                   │         │           │           │
+                   │         │  ┌────────▼────────┐ │
+                   │         │  │ dlx.exchange    │ │ 死信 Exchange
+                   │         │  │  ┌───────────┐  │ │
+                   │         │  │  │ retry.queue│──┘── TTL 到期投回 delivery.queue
+                   │         │  │  └───────────┘  │
+                   │         │  │  ┌───────────┐  │
+                   │         │  │  │ dead.queue │   超过最大重试 → 人工处理 / 告警
+                   │         │  │  └───────────┘  │
+                   │         │  └─────────────────┘ │
+                   │         └─────────────────────┘
+                   │                     │
+                   │                     ▼
+                   │          ┌──────────────────────┐
+                   │          │  Worker 层             │
+                   │          │  (无状态, 可多实例)      │
+                   │          │  ┌──────────────────┐ │
+                   │          │  │  Delivery Worker  │ │ 从 delivery.queue 消费
+                   │          │  │  → HTTP 投递       │ │ Basic.Ack 在投递完成后
+                   │          │  │  → 成功: Ack      │ │
+                   │          │  │  → 失败: Nack +   │ │
+                   │          │  │    Reject → DLX   │ │
+                   │          │  │  → 终态: 插入      │ │
+                   │          │  │    callback.queue │ │
+                   │          │  └──────────────────┘ │
+                   │          │  ┌──────────────────┐ │
+                   │          │  │ Callback Worker   │ │ 从 callback.queue 消费
+                   │          │  │ → HTTP 回调       │ │
+                   │          │  │ → 成功: Ack      │ │
+                   │          │  │ → 失败: Nack → DLX│ │
+                   │          │  └──────────────────┘ │
+                   │          └──────────────────────┘
+                   │                     │
+                   │                     ▼
+                   │         ┌──────────────────────┐
+                   │         │     PostgreSQL        │
+                   │         │  (查询 / 记录存储)      │
+                   │         │  notifications        │
+                   │         │  delivery_attempts    │
+                   │         │  callbacks            │
+                   │         │  callback_attempts    │
+                   │         └──────────────────────┘
+                   │
+                   └─────────────────────────────────── 外部供应商 API
+                                                         (广吿/CRM/库存等)
+```
+
+##### 消息流转路径
+
+完整的消息生命周期：
+
+```
+① 提交 → ② 持久化 → ③ 入队 → ④ 消费 → ⑤ 投递 → ⑥ 终态
+```
+
+**投递消息流：**
+
+1. API 收到请求后，写入 `notifications` 表（ID、supplier、body、headers 等），同时写入 `delivery_history` 记录初始状态
+2. API 将 `{notification_id, supplier, url, method, headers, body, `callback_url}` 发布到 `delivery.exchange`（routing_key = supplier.name）
+3. `delivery.queue` 通过 binding_key 接收消息，多个 Worker 实例消费（竞争消费模式，RabbitMQ 保证一条消息仅被一个 consumer 接收）
+4. Worker 消费消息后执行 HTTP 投递：
+   - **成功**（匹配 `accepted_statuses`）：`Basic.Ack`，更新 DB 为 `delivered`，若含 `callback_url` 则发布消息到 `callback.exchange`
+   - **可重试失败**（网络超时、服务器错误 5xx、非接受状态码）：`Basic.Nack(requeue=false)`，消息被投递到 `dlx.exchange` → `retry.queue`（设置 TTL 实现重试延迟）
+   - **超过最大重试次数**：消息路由到 `dead.queue`，触发告警通知
+5. `retry.queue` 的 TTL 到期后，消息自动重新投递到 `delivery.queue`（通过 DLX 的 routing_key 回路由），Worker 再次消费
+
+**回调消息流（独立于投递流程）：**
+
+- 投递到达终态（delivered/dead）且通知含 `callback_url` 时，API/Worker 发布消息到 `callback.exchange`
+- `callback.queue` 由 CallbackWorker 消费，回调业务系统，成功则 Ack
+- 回调失败的消息也经 DLX → `retry.queue` → TTL 到期回调 `callback.queue`，超过最大重试进入 `dead.queue`
+
+##### 死信与重试机制
+
+RabbitMQ 的死信交换机（DLX）天然适合本服务的重试场景：
+
+```
+第一次投递失败:
+┌──────────────┐   Basic.Nack   ┌───────────────┐   TTL 5s   ┌──────────────┐
+│ delivery.queue│──────────────►│ dlx.exchange  │──────────►│ retry.queue  │
+│              │ (requeue=false) │               │            │              │
+└──────────────┘                └───────────────┘            └──────┬───────┘
+                                                                    │
+                                                     自动重新路由    │
+                                                                    ▼
+                                                            ┌──────────────┐
+                                                            │ delivery.queue│
+                                                            │ (再次消费)    │
+                                                            └──────────────┘
+```
+
+每次失败时，Worker 执行 `Basic.Nack(requeue=false)`，消息经 DLX 进入 `retry.queue`。
+
+`retry.queue` 的特性：
+- `x-message-ttl`: 根据重试次数递增（如 5s, 30s, 2min, 10min, 30min...）
+- `x-dead-letter-exchange`: 设置为 `delivery.exchange`
+- `x-dead-letter-routing-key`: 设置为原队列的 routing_key
+
+**判断超过最大重试次数**：Worker 在消费时检查消息头部携带的重试计数（`x-death` 头或自定义 header 如 `x-retry-count`），超过阈值后执行 `Basic.Reject(requeue=false)` 将消息路由到 `dead.queue`（无需人工介入，在绑定关系中将 `dead.queue` 绑定到 DLX 的 `dead` routing_key 即可），不再重试。
+
+```
+超过最大重试阈值:
+┌────────────┐   Basic.Reject   ┌────────────┐
+│ retry.queue │──────────────►  │ dead.queue │
+│             │ (requeue=false)  │            │
+└────────────┘                  └────────────┘
+                                    │
+                                    ▼
+                             告警平台 / 人工介入
+```
+
+**Dead Letter 的差异化 routing**：`retry.queue` 和 `dead.queue` 都是 `dlx.exchange` 的绑定队列，但通过不同的 routing_key 区分。Worker 根据重试计数决定使用哪个 routing_key 进行 Reject。
+
+##### RabbitMQ 配置拓扑
+
+三个 Exchange、五个 Queue：
+
+| 组件 | 类型 | 用途 |
+|------|------|------|
+| `delivery.exchange` | direct | 接收投递消息 |
+| `callback.exchange` | direct | 接收回调消息 |
+| `dlx.exchange` | direct | 统一死信转发 |
+| `delivery.queue` | — | 待投递消息，Worker 消费 |
+| `callback.queue` | — | 待回调消息，CallbackWorker 消费 |
+| `retry.queue-delivery` | — | 投递重试延迟，TTL 到后回路由到 delivery.exchange |
+| `retry.queue-callback` | — | 回调重试延迟 |
+| `dead.queue` | — | 超过最大重试次数的终态消息 |
+
+##### 调用已存在的数据库
+
+PostgreSQL 退化为**查询和记录存储**，不再承担轮询职责：
+
+- `notifications` 表：存储通知的完整信息（ID、supplier、body、headers、callback_url 等）
+- `delivery_attempts` 表：保留每次投递的完整记录（response_status、response_body、error_message、attempted_at）
+- `callbacks` / `callback_attempts` 表：同 MVP 阶段，记录回调记录和历史
+- **Worker 不再查询 pending 通知**，消息由 RabbitMQ 队列推送
 
 ---
 
