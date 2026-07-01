@@ -1,0 +1,22 @@
+server:
+  port: 8080
+
+database:
+  path: ./delivery.db
+
+worker:
+  poll_interval: 500ms
+  max_concurrency: 10
+  http_timeout: 30s
+
+suppliers:
+  - name: ad-system
+    url: https://api.adsystem.com/notify
+    method: POST
+    headers:
+      Content-Type: application/json
+      Authorization: "Bearer ${AD_SYSTEM_TOKEN}"
+    retry:
+      max_attempts: 15
+      base_delay: 1s
+      max_delay: 240s
