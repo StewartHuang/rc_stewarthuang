@@ -124,7 +124,23 @@ func (w *Worker) deliver(n model.Notification) {
 	respBody, _ := io.ReadAll(resp.Body)
 	respStatus := resp.StatusCode
 
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	sup, supErr := w.store.GetSupplier(n.Supplier)
+	if supErr != nil {
+		log.Printf("worker: failed to get supplier %s: %v", n.Supplier, supErr)
+		w.recordFailure(&n, &respStatus, string(respBody))
+		return
+	}
+
+	var acceptedStatuses []int
+	json.Unmarshal([]byte(sup.AcceptedStatuses), &acceptedStatuses)
+	success := false
+	for _, s := range acceptedStatuses {
+		if respStatus == s {
+			success = true
+			break
+		}
+	}
+	if success {
 		w.recordSuccess(&n, respStatus, string(respBody))
 	} else {
 		w.recordFailure(&n, &respStatus, string(respBody))
@@ -148,6 +164,10 @@ func (w *Worker) recordSuccess(n *model.Notification, status int, body string) {
 		AttemptedAt:    time.Now().UTC(),
 	}); err != nil {
 		log.Printf("worker: failed to record delivery attempt for %s: %v", n.ID, err)
+	}
+
+	if n.CallbackURL != nil && *n.CallbackURL != "" {
+		w.insertCallback(n.ID, *n.CallbackURL, n.Status)
 	}
 }
 
@@ -185,6 +205,10 @@ func (w *Worker) recordFailure(n *model.Notification, status *int, errMsg string
 	if err := w.store.UpdateNotification(n); err != nil {
 		log.Printf("worker: failed to update notification %s: %v", n.ID, err)
 	}
+
+	if n.Status == "dead" && n.CallbackURL != nil && *n.CallbackURL != "" {
+		w.insertCallback(n.ID, *n.CallbackURL, n.Status)
+	}
 }
 
 func calculateNextRetry(attemptCount int, baseDelayMs int, maxDelayMs int) time.Duration {
@@ -211,4 +235,21 @@ func (w *Worker) getMaxDelay(n model.Notification) int {
 		return 240000
 	}
 	return sup.RetryMaxDelayMs
+}
+
+func (w *Worker) insertCallback(notificationID, callbackURL, notifStatus string) {
+	now := time.Now().UTC()
+	cb := &model.Callback{
+		NotificationID:     notificationID,
+		NotificationStatus: notifStatus,
+		CallbackURL:        callbackURL,
+		Status:             "pending",
+		MaxAttempts:        3,
+		RetryDelayMs:       10000,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := w.store.CreateCallback(cb); err != nil {
+		log.Printf("worker: failed to create callback record for %s: %v", notificationID, err)
+	}
 }

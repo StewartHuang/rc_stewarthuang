@@ -107,6 +107,88 @@ func TestWorkerDeliverFailureThenDead(t *testing.T) {
 	}
 }
 
+func TestAcceptedStatuses(t *testing.T) {
+	s := newTestStore(t)
+	s.CreateSupplier(&model.Supplier{
+		Name: "custom-status", URL: "http://localhost:19997/notify", Method: "POST",
+		Headers: "{}", Enabled: true,
+		RetryMaxAttempts: 3, RetryBaseDelayMs: 100, RetryMaxDelayMs: 1000,
+		AcceptedStatuses: "[201]",
+	})
+	s.CreateNotification(&model.Notification{
+		ID: "cs1", Supplier: "custom-status",
+		URL: "http://localhost:19997/notify", Method: "POST",
+		Headers: "{}", Body: `{}`,
+		Status: "pending", MaxAttempts: 3,
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	n, _ := s.GetNotification("cs1")
+	n.URL = server.URL
+	s.UpdateNotification(n)
+
+	cfg := &config.WorkerConfig{
+		PollInterval: "100ms", MaxConcurrency: 5, HTTPTimeout: "5s",
+	}
+	w := NewWorker(s, cfg)
+	go w.Start()
+	time.Sleep(500 * time.Millisecond)
+	w.Stop()
+
+	updated, _ := s.GetNotification("cs1")
+	if updated.Status != "delivered" {
+		t.Fatalf("expected delivered, got %s", updated.Status)
+	}
+}
+
+func TestCallbackInsertedOnDelivered(t *testing.T) {
+	s := newTestStore(t)
+	cbURL := "https://biz.company.com/callback"
+	s.CreateSupplier(&model.Supplier{
+		Name: "cb-sup", URL: "http://localhost:19996/notify", Method: "POST",
+		Headers: "{}", Enabled: true,
+		RetryMaxAttempts: 3, RetryBaseDelayMs: 100, RetryMaxDelayMs: 1000,
+	})
+	s.CreateNotification(&model.Notification{
+		ID: "cb1", Supplier: "cb-sup",
+		URL: "http://localhost:19996/notify", Method: "POST",
+		Headers: "{}", Body: `{}`,
+		Status: "pending", MaxAttempts: 3,
+		CallbackURL: &cbURL,
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	n, _ := s.GetNotification("cb1")
+	n.URL = server.URL
+	s.UpdateNotification(n)
+
+	cfg := &config.WorkerConfig{
+		PollInterval: "100ms", MaxConcurrency: 5, HTTPTimeout: "5s",
+	}
+	w := NewWorker(s, cfg)
+	go w.Start()
+	time.Sleep(500 * time.Millisecond)
+	w.Stop()
+
+	callbacks, _ := s.FindPendingCallbacks(10)
+	if len(callbacks) != 1 {
+		t.Fatalf("expected 1 callback, got %d", len(callbacks))
+	}
+	if callbacks[0].NotificationID != "cb1" {
+		t.Fatalf("expected cb1, got %s", callbacks[0].NotificationID)
+	}
+}
+
 func TestCalculateNextRetry(t *testing.T) {
 	tests := []struct {
 		attempt  int
