@@ -548,16 +548,16 @@ WHERE id = 'n1' AND version = 3;
 
 RabbitMQ 更适合本服务的消息投递场景，具体原因如下（针对本服务的消息模型）：
 
-| 维度 | RabbitMQ | Apache Kafka |
-|------|----------|--------------|
-| **死信队列（DLX）** | 原生支持，Exchange 级配置，队列绑定即可 | 需通过 topic 重定向或 Stream 的 compact 策略模拟 |
-| **消息存活时间（TTL）** | 队列/消息级别原生支持 | 无原生 TTL，需应用层或配置 retention.ms |
-| **延迟投递（Delayed Message）** | 通过延迟交换机（rabbitmq_delayed_message_exchange）支持 | 需依赖时间戳轮询处理 |
-| **消费确认（ACK）** | 支持推模式消费且单条 ACK，天然匹配 Worker"取一条→投递→ACK"模式 | 需维护 offset，更适用于批量流式消费 |
-| **重试机制** | 死信后 re-route 回原队列（DLX + TTL）实现重试，完全在 broker 侧完成 | 需重投到原 topic，配合 consumer seek 实现，应用负担更重 |
-| **消息语义** | 至少一次投递（ACK+重投） | 支持精确一次（需配合幂等 Producer 和 Transaction） |
-| **运维复杂度** | 单节点可部署（erlang 一致 Hash），配置简单 | 需要 Zookeeper/Kraft，最少 3 节点才能算生产集群 |
-| **适合场景** | 任务队列、异步 RPC、事件通知、死信重试 | 日志聚合、流计算、事件溯源、大数据管道 |
+| 维度                        | RabbitMQ                                        | Apache Kafka                           |
+|---------------------------|-------------------------------------------------|----------------------------------------|
+| **死信队列（DLX）**             | 原生支持，Exchange 级配置，队列绑定即可                        | 需通过 topic 重定向或 Stream 的 compact 策略模拟   |
+| **消息存活时间（TTL）**           | 队列/消息级别原生支持                                     | 无原生 TTL，需应用层或配置 retention.ms           |
+| **延迟投递（Delayed Message）** | 通过延迟交换机（rabbitmq_delayed_message_exchange）支持    | 需依赖时间戳轮询处理                             |
+| **消费确认（ACK）**             | 支持推模式消费且单条 ACK，天然匹配 Worker"取一条→投递→ACK"模式        | 需维护 offset，更适用于批量流式消费                  |
+| **重试机制**                  | 死信后 re-route 回原队列（DLX + TTL）实现重试，完全在 broker 侧完成 | 需重投到原 topic，配合 consumer seek 实现，应用负担更重 |
+| **消息语义**                  | 至少一次投递（ACK+重投）                                  | 支持精确一次（需配合幂等 Producer 和 Transaction）   |
+| **运维复杂度**                 | 单节点可部署（erlang 一致 Hash），配置简单                     | 需要 Zookeeper/Kraft，最少 3 节点才能算生产集群      |
+| **适合场景**                  | 任务队列、异步 RPC、事件通知、死信重试                           | 日志聚合、流计算、事件溯源、大数据管道                    |
 
 总结：RabbitMQ 的 **Exchange → Queue → Binding** 模型天然匹配"提交通知 → 投递队列 → 死信重试"的消息流转路径；原生死信交换机（DLX）和 TTL 可以在 broker 层面完成重试延迟，Worker 只需要单条 ACK 即可控制消费进度。
 
