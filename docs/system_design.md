@@ -143,7 +143,6 @@ delay = min(base_delay_ms × 2^attempt, max_delay_ms) + random(0, 50%)
 
 - 超过 `max_attempts` 后，通知进入 `dead` 状态并记录失败原因。
 - 提供 API 支持查询和重新投递死信（重置为 `pending` 状态，清空 `next_retry_at`）。
-- 后续如果有
 
 ### 3.6 回调投递流程
 
