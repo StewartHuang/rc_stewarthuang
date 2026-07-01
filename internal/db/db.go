@@ -22,7 +22,7 @@ func NewStore(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&model.Supplier{}, &model.Notification{}, &model.DeliveryAttempt{}); err != nil {
+	if err := db.AutoMigrate(&model.Supplier{}, &model.Notification{}, &model.DeliveryAttempt{}, &model.Callback{}, &model.CallbackAttempt{}); err != nil {
 		return nil, err
 	}
 	return &Store{DB: db}, nil
