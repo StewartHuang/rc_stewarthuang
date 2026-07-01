@@ -8,6 +8,8 @@ OpenCode + Superpowers plugin + DeepSeek V4 Flash
 1. 系统方案设计阶段：
    - 通过 Superpowers Plugin 梳理需求，并生成系统设计文档
    - 在人工对系统方案设计文档时做出的决策和纠正时自动写入到该文档
+2. 详细方案+代码实现
+   - 由 superpowers 在确定 SPEC 后使用 SubAgent 模式完成首版代码实现
 
 # AI 给出过哪些你没有采纳的建议
 1. 系统设计环节中在 DB 设计时使用了 外键 和 CHECK 功能
