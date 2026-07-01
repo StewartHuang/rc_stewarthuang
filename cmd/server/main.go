@@ -48,12 +48,7 @@ func main() {
 		if maxAttempts == 0 {
 			maxAttempts = 15
 		}
-		acceptedStatuses := "[200]"
-		if len(sc.AcceptedStatuses) > 0 {
-			b, _ := json.Marshal(sc.AcceptedStatuses)
-			acceptedStatuses = string(b)
-		}
-		suppliers = append(suppliers, model.Supplier{
+		sup := model.Supplier{
 			Name:             sc.Name,
 			URL:              sc.URL,
 			Method:           sc.Method,
@@ -61,9 +56,13 @@ func main() {
 			RetryMaxAttempts: maxAttempts,
 			RetryBaseDelayMs: baseDelay,
 			RetryMaxDelayMs:  maxDelay,
-			AcceptedStatuses: acceptedStatuses,
 			Enabled:          true,
-		})
+		}
+		if len(sc.AcceptedStatuses) > 0 {
+			b, _ := json.Marshal(sc.AcceptedStatuses)
+			sup.AcceptedStatuses = string(b)
+		}
+		suppliers = append(suppliers, sup)
 	}
 	if err := store.SyncSuppliersFromConfig(suppliers); err != nil {
 		log.Fatalf("failed to sync suppliers: %v", err)

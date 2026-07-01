@@ -51,8 +51,8 @@ func (s *Store) SyncSuppliersFromConfig(entries []model.Supplier) error {
 			return err
 		}
 		e.ID = existing.ID
-		// Preserve accepted_statuses if not set in config (empty list)
-		if e.AcceptedStatuses == "[200]" && existing.AcceptedStatuses != "[200]" {
+		// Preserve accepted_statuses if not explicitly set in config
+		if e.AcceptedStatuses == "" && existing.AcceptedStatuses != "" {
 			e.AcceptedStatuses = existing.AcceptedStatuses
 		}
 		if err := s.DB.Save(&e).Error; err != nil {
