@@ -29,11 +29,12 @@ type WorkerConfig struct {
 }
 
 type SupplierEntry struct {
-	Name    string            `yaml:"name"`
-	URL     string            `yaml:"url"`
-	Method  string            `yaml:"method"`
-	Headers map[string]string `yaml:"headers"`
-	Retry   RetryConfig       `yaml:"retry"`
+	Name             string            `yaml:"name"`
+	URL              string            `yaml:"url"`
+	Method           string            `yaml:"method"`
+	Headers          map[string]string `yaml:"headers"`
+	Retry            RetryConfig       `yaml:"retry"`
+	AcceptedStatuses []int             `yaml:"accepted_statuses"`
 }
 
 type RetryConfig struct {

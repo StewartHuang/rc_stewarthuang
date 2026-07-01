@@ -152,3 +152,40 @@ func submitTestNotification(t *testing.T, s *db.Store, id string) {
 }
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+func TestCreateSupplierWithAcceptedStatuses(t *testing.T) {
+	app, _ := newTestApp(t)
+	body := `{"name":"status-sup","url":"https://status.com","method":"POST","accepted_statuses":[200,201,204]}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/suppliers", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	app.Router.ServeHTTP(w, req)
+	if w.Code != 201 {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var sup model.Supplier
+	json.Unmarshal(w.Body.Bytes(), &sup)
+	if sup.AcceptedStatuses != `[200,201,204]` {
+		t.Fatalf("expected [200,201,204], got %s", sup.AcceptedStatuses)
+	}
+}
+
+func TestUpdateSupplierAcceptedStatuses(t *testing.T) {
+	app, s := newTestApp(t)
+	s.CreateSupplier(&model.Supplier{
+		Name: "upd-status", URL: "https://old.com", Method: "POST",
+		Headers: "{}", Enabled: true, AcceptedStatuses: "[200]",
+	})
+	body := `{"accepted_statuses":[200,202]}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("PUT", "/api/v1/suppliers/upd-status", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	app.Router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	updated, _ := s.GetSupplier("upd-status")
+	if updated.AcceptedStatuses != `[200,202]` {
+		t.Fatalf("expected [200,202], got %s", updated.AcceptedStatuses)
+	}
+}

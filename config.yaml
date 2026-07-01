@@ -13,6 +13,7 @@ suppliers:
   - name: ad-system
     url: https://api.adsystem.com/notify
     method: POST
+    accepted_statuses: [200, 201]
     headers:
       Content-Type: application/json
       Authorization: "Bearer ${AD_SYSTEM_TOKEN}"

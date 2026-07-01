@@ -48,6 +48,11 @@ func main() {
 		if maxAttempts == 0 {
 			maxAttempts = 15
 		}
+		acceptedStatuses := "[200]"
+		if len(sc.AcceptedStatuses) > 0 {
+			b, _ := json.Marshal(sc.AcceptedStatuses)
+			acceptedStatuses = string(b)
+		}
 		suppliers = append(suppliers, model.Supplier{
 			Name:             sc.Name,
 			URL:              sc.URL,
@@ -56,6 +61,7 @@ func main() {
 			RetryMaxAttempts: maxAttempts,
 			RetryBaseDelayMs: baseDelay,
 			RetryMaxDelayMs:  maxDelay,
+			AcceptedStatuses: acceptedStatuses,
 			Enabled:          true,
 		})
 	}

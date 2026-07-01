@@ -13,11 +13,12 @@ import (
 )
 
 type supplierRequest struct {
-	Name    string            `json:"name"`
-	URL     string            `json:"url"`
-	Method  string            `json:"method"`
-	Headers map[string]string `json:"headers"`
-	Retry   *retryRequest     `json:"retry"`
+	Name             string            `json:"name"`
+	URL              string            `json:"url"`
+	Method           string            `json:"method"`
+	Headers          map[string]string `json:"headers"`
+	Retry            *retryRequest     `json:"retry"`
+	AcceptedStatuses []int             `json:"accepted_statuses"`
 }
 
 type retryRequest struct {
@@ -84,6 +85,10 @@ func (a *App) CreateSupplier(c *gin.Context) {
 			sup.RetryMaxDelayMs = int(d.Milliseconds())
 		}
 	}
+	if len(req.AcceptedStatuses) > 0 {
+		b, _ := json.Marshal(req.AcceptedStatuses)
+		sup.AcceptedStatuses = string(b)
+	}
 	if err := a.Store.CreateSupplier(&sup); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("supplier %q already exists", req.Name)})
 		return
@@ -127,6 +132,10 @@ func (a *App) UpdateSupplier(c *gin.Context) {
 		if d, err := time.ParseDuration(req.Retry.MaxDelay); err == nil {
 			existing.RetryMaxDelayMs = int(d.Milliseconds())
 		}
+	}
+	if len(req.AcceptedStatuses) > 0 {
+		b, _ := json.Marshal(req.AcceptedStatuses)
+		existing.AcceptedStatuses = string(b)
 	}
 	if err := a.Store.UpdateSupplier(existing); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
