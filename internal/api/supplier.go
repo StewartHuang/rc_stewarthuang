@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -39,7 +40,7 @@ func (a *App) ListSuppliers(c *gin.Context) {
 func (a *App) GetSupplier(c *gin.Context) {
 	sup, err := a.Store.GetSupplier(c.Param("name"))
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("supplier %q not found", c.Param("name"))})
 			return
 		}
@@ -101,7 +102,7 @@ func (a *App) UpdateSupplier(c *gin.Context) {
 	name := c.Param("name")
 	existing, err := a.Store.GetSupplier(name)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("supplier %q not found", name)})
 			return
 		}
@@ -147,7 +148,7 @@ func (a *App) UpdateSupplier(c *gin.Context) {
 
 func (a *App) DeleteSupplier(c *gin.Context) {
 	if err := a.Store.DeleteSupplier(c.Param("name")); err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("supplier %q not found", c.Param("name"))})
 			return
 		}

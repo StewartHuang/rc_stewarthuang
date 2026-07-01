@@ -15,24 +15,24 @@
 ```
 ┌──────────────┐   POST /api/v1/notifications
 │  业务系统 A   │ ──────────────► ┌──────────────────────────────────────────┐
-│  业务系统 B   │                 │          Delivery Service                  │
-│  业务系统 C   │                 │    单进程 (HTTP Server + Workers)          │
+│  业务系统 B   │                 │          Delivery Service                │
+│  业务系统 C   │                 │    单进程 (HTTP Server + Workers)         │
 └──────┬───────┘                 │  ┌─────────┐  ┌──────────────────────┐   │
        │                         │  │ Gin API │  │   Background Worker  │   │
        │ callback                │  └────┬────┘  │  (轮询 + HTTP 投递)   │   │
-       │ HTTP POST               │       │        └────────┬─────────────┘   │
-       │ "notif_id + status"     │       ▼                  ▼               │
+       │ HTTP POST               │       │       └────────┬─────────────┘   │
+       │ "notif_id + status"     │       ▼                ▼                 │
        │                         │  ┌───────────────────────────────────┐   │
-       │                         │  │          SQLite                  │   │
-       │                         │  │  notifications / suppliers      │   │
-       │                         │  │  delivery_attempts / callbacks   │   │
-       │                         │  │  callback_attempts               │   │
+       │                         │  │          SQLite                   │   │
+       │                         │  │  notifications / suppliers        │   │
+       │                         │  │  delivery_attempts / callbacks    │   │
+       │                         │  │  callback_attempts                │   │
        │                         │  └────────────┬──────────────────────┘   │
        │                         │               │                          │
        │                         │               ▼                          │
        │                         │  ┌──────────────────────┐                │
-       │                         │  │  CallbackWorker      │               │
-       │                         │  │  (轮询 callbacks 投递) │               │
+       │                         │  │  CallbackWorker      │                │
+       │                         │  │ (轮询 callbacks 投递) │                │
        │                         │  └──────────────────────┘                │
        │                         └──────────────────────────────────────────┘
        │                                       │
@@ -210,7 +210,7 @@ Content-Type: application/json
 | `accepted_statuses` | 否 | 接受状态码列表，默认 `[200]` |
 | `headers` | 否 | 请求头 |
 | `retry` | 否 | 重试策略配置 |
-```
+
 
 ## Worker 投递机制
 

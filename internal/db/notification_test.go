@@ -1,6 +1,7 @@
 package db
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -10,94 +11,127 @@ import (
 )
 
 func TestCreateNotification(t *testing.T) {
-	s := newTestStore(t)
-	seedSupplier(t, s)
-	n := &model.Notification{
-		ID: "notif-1", Supplier: "test-supplier",
-		URL: "https://example.com/notify", Method: "POST",
-		Headers: `{"Content-Type": "application/json"}`,
-		Body:    `{"user_id": 123}`,
-		Status:  "pending", AttemptCount: 0, MaxAttempts: 15,
+	tests := []struct {
+		name       string
+		id         string
+		idemKey    *string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{name: "valid", id: "notif-1", wantErr: false},
+		{name: "duplicate idempotency key", id: "notif-2", idemKey: strPtr("dup-key"), wantErr: true},
 	}
-	if err := s.CreateNotification(n); err != nil {
-		t.Fatalf("CreateNotification failed: %v", err)
-	}
-}
-
-func TestCreateNotificationIdempotency(t *testing.T) {
-	s := newTestStore(t)
-	seedSupplier(t, s)
-	key := "idem-key-1"
-	n1 := &model.Notification{
-		ID: "n1", Supplier: "test-supplier",
-		URL: "https://example.com/n", Method: "POST",
-		Headers: "{}", Body: "{}",
-		IdempotencyKey: &key,
-		Status:         "pending", MaxAttempts: 15,
-	}
-	if err := s.CreateNotification(n1); err != nil {
-		t.Fatal(err)
-	}
-	n2 := &model.Notification{
-		ID: "n2", Supplier: "test-supplier",
-		URL: "https://example.com/n", Method: "POST",
-		Headers: "{}", Body: "{}",
-		IdempotencyKey: &key,
-		Status:         "pending", MaxAttempts: 15,
-	}
-	err := s.CreateNotification(n2)
-	if err == nil {
-		t.Fatal("expected error for duplicate idempotency_key")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			seedSupplier(t, s)
+			if tt.idemKey != nil {
+				s.CreateNotification(&model.Notification{
+					ID: "existing", Supplier: "test-supplier",
+					URL: "https://example.com/n", Method: "POST",
+					Headers: "{}", Body: "{}",
+					IdempotencyKey: tt.idemKey,
+					Status:         "pending", MaxAttempts: 15,
+				})
+			}
+			n := &model.Notification{
+				ID: tt.id, Supplier: "test-supplier",
+				URL: "https://example.com/notify", Method: "POST",
+				Headers: `{"Content-Type": "application/json"}`,
+				Body:    `{"user_id": 123}`,
+				Status:  "pending", AttemptCount: 0, MaxAttempts: 15,
+			}
+			if tt.idemKey != nil {
+				n.IdempotencyKey = tt.idemKey
+			}
+			err := s.CreateNotification(n)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CreateNotification failed: %v", err)
+			}
+		})
 	}
 }
 
 func TestGetNotification(t *testing.T) {
-	s := newTestStore(t)
-	seedSupplier(t, s)
-	s.CreateNotification(&model.Notification{
-		ID: "get-test", Supplier: "test-supplier",
-		URL: "https://example.com", Method: "POST",
-		Headers: "{}", Body: "{}",
-		Status: "pending", MaxAttempts: 15,
-	})
-	got, err := s.GetNotification("get-test")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{name: "found", id: "get-test", wantErr: false},
+		{name: "not found", id: "nonexistent", wantErr: true},
 	}
-	if got.Status != "pending" {
-		t.Fatalf("expected status pending, got %s", got.Status)
-	}
-}
-
-func TestGetNotificationNotFound(t *testing.T) {
-	s := newTestStore(t)
-	_, err := s.GetNotification("nonexistent")
-	if err != gorm.ErrRecordNotFound {
-		t.Fatalf("expected ErrRecordNotFound, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			seedSupplier(t, s)
+			if tt.id == "get-test" {
+				s.CreateNotification(&model.Notification{
+					ID: "get-test", Supplier: "test-supplier",
+					URL: "https://example.com", Method: "POST",
+					Headers: "{}", Body: "{}",
+					Status: "pending", MaxAttempts: 15,
+				})
+			}
+			got, err := s.GetNotification(tt.id)
+			if tt.wantErr {
+				if err != gorm.ErrRecordNotFound {
+					t.Errorf("expected ErrRecordNotFound, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != "pending" {
+				t.Errorf("expected status pending, got %s", got.Status)
+			}
+		})
 	}
 }
 
 func TestListNotificationsByStatus(t *testing.T) {
-	s := newTestStore(t)
-	seedSupplier(t, s)
-	s.CreateNotification(&model.Notification{ID: "n1", Supplier: "test-supplier", URL: "https://a.com", Method: "POST", Headers: "{}", Body: "{}", Status: "pending", MaxAttempts: 15})
-	s.CreateNotification(&model.Notification{ID: "n2", Supplier: "test-supplier", URL: "https://b.com", Method: "POST", Headers: "{}", Body: "{}", Status: "delivered", MaxAttempts: 15})
-	s.CreateNotification(&model.Notification{ID: "n3", Supplier: "test-supplier", URL: "https://c.com", Method: "POST", Headers: "{}", Body: "{}", Status: "dead", MaxAttempts: 15, DeadReason: strPtr("max retries exceeded")})
-
-	pending, err := s.ListNotificationsByStatus("pending")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name   string
+		status string
+		count  int
+	}{
+		{name: "pending", status: "pending", count: 1},
+		{name: "delivered", status: "delivered", count: 1},
+		{name: "dead", status: "dead", count: 1},
+		{name: "no match", status: "failed", count: 0},
 	}
-	if len(pending) != 1 {
-		t.Fatalf("expected 1 pending, got %d", len(pending))
-	}
-
-	dead, err := s.ListNotificationsByStatus("dead")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(dead) != 1 {
-		t.Fatalf("expected 1 dead, got %d", len(dead))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			seedSupplier(t, s)
+			s.CreateNotification(&model.Notification{
+				ID: "n1", Supplier: "test-supplier", URL: "https://a.com",
+				Method: "POST", Headers: "{}", Body: "{}", Status: "pending", MaxAttempts: 15,
+			})
+			s.CreateNotification(&model.Notification{
+				ID: "n2", Supplier: "test-supplier", URL: "https://b.com",
+				Method: "POST", Headers: "{}", Body: "{}", Status: "delivered", MaxAttempts: 15,
+			})
+			s.CreateNotification(&model.Notification{
+				ID: "n3", Supplier: "test-supplier", URL: "https://c.com",
+				Method: "POST", Headers: "{}", Body: "{}", Status: "dead", MaxAttempts: 15,
+				DeadReason: strPtr("max retries exceeded"),
+			})
+			results, err := s.ListNotificationsByStatus(tt.status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != tt.count {
+				t.Errorf("expected %d notifications, got %d", tt.count, len(results))
+			}
+		})
 	}
 }
 
@@ -123,6 +157,8 @@ func TestUpdateNotification(t *testing.T) {
 func TestFindPendingNotifications(t *testing.T) {
 	s := newTestStore(t)
 	seedSupplier(t, s)
+	past := time.Now().UTC().Add(-time.Minute)
+	future := time.Now().UTC().Add(time.Hour)
 
 	// pending with no next_retry_at (immediately eligible)
 	s.CreateNotification(&model.Notification{
@@ -132,13 +168,20 @@ func TestFindPendingNotifications(t *testing.T) {
 		Status: "pending", MaxAttempts: 15,
 	})
 	// failed with past next_retry_at (eligible)
-	past := time.Now().UTC().Add(-time.Minute)
 	s.CreateNotification(&model.Notification{
 		ID: "n2", Supplier: "test-supplier",
 		URL: "https://b.com", Method: "POST",
 		Headers: "{}", Body: "{}",
 		Status: "failed", MaxAttempts: 15,
 		AttemptCount: 1, NextRetryAt: &past,
+	})
+	// failed with future next_retry_at (not eligible)
+	s.CreateNotification(&model.Notification{
+		ID: "n4", Supplier: "test-supplier",
+		URL: "https://d.com", Method: "POST",
+		Headers: "{}", Body: "{}",
+		Status: "failed", MaxAttempts: 15,
+		AttemptCount: 1, NextRetryAt: &future,
 	})
 	// delivered (not eligible)
 	s.CreateNotification(&model.Notification{
@@ -147,6 +190,14 @@ func TestFindPendingNotifications(t *testing.T) {
 		Headers: "{}", Body: "{}",
 		Status: "delivered", MaxAttempts: 15,
 	})
+	// dead (not eligible)
+	s.CreateNotification(&model.Notification{
+		ID: "n5", Supplier: "test-supplier",
+		URL: "https://e.com", Method: "POST",
+		Headers: "{}", Body: "{}",
+		Status: "dead", MaxAttempts: 15,
+		AttemptCount: 15, DeadReason: strPtr("max retries"),
+	})
 
 	results, err := s.FindPendingNotifications(10)
 	if err != nil {
@@ -154,6 +205,11 @@ func TestFindPendingNotifications(t *testing.T) {
 	}
 	if len(results) != 2 {
 		t.Fatalf("expected 2 pending notifications, got %d", len(results))
+	}
+	ids := []string{results[0].ID, results[1].ID}
+	sort.Strings(ids)
+	if ids[0] != "n1" || ids[1] != "n2" {
+		t.Errorf("expected [n1 n2], got %v", ids)
 	}
 }
 

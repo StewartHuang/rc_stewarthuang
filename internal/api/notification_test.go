@@ -10,33 +10,84 @@ import (
 )
 
 func TestSubmitNotification(t *testing.T) {
-	app, s := newTestApp(t)
-	seedTestSupplier(t, s)
-
-	body := `{"supplier":"test-supplier","body":{"user_id":1}}`
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/v1/notifications", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	app.Router.ServeHTTP(w, req)
-
-	if w.Code != 202 {
-		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	tests := []struct {
+		name       string
+		body       string
+		seed       bool
+		expectCode int
+		expectID   bool
+		expectCB   bool
+		cbValue    string
+	}{
+		{
+			name:       "valid",
+			body:       `{"supplier":"test-supplier","body":{"user_id":1}}`,
+			seed:       true,
+			expectCode: 202,
+			expectID:   true,
+		},
+		{
+			name:       "missing supplier",
+			body:       `{"body":{"user_id":1}}`,
+			expectCode: 400,
+		},
+		{
+			name:       "supplier not found",
+			body:       `{"supplier":"nonexistent","body":{}}`,
+			seed:       true,
+			expectCode: 400,
+		},
+		{
+			name:       "with callback URL",
+			body:       `{"supplier":"test-supplier","body":{"user_id":1},"callback_url":"https://biz.company.com/callback"}`,
+			seed:       true,
+			expectCode: 202,
+			expectID:   true,
+			expectCB:   true,
+			cbValue:    "https://biz.company.com/callback",
+		},
 	}
-	var resp map[string]string
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["id"] == "" {
-		t.Fatal("expected non-empty notification id")
-	}
-	if resp["status"] != "accepted" {
-		t.Fatalf("expected accepted, got %s", resp["status"])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app, s := newTestApp(t)
+			if tt.seed {
+				seedTestSupplier(t, s)
+			}
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/api/v1/notifications", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			app.Router.ServeHTTP(w, req)
+			if w.Code != tt.expectCode {
+				t.Fatalf("expected %d, got %d: %s", tt.expectCode, w.Code, w.Body.String())
+			}
+			if tt.expectID {
+				var resp map[string]string
+				json.Unmarshal(w.Body.Bytes(), &resp)
+				if resp["id"] == "" {
+					t.Fatal("expected non-empty notification id")
+				}
+				if resp["status"] != "accepted" {
+					t.Errorf("expected accepted, got %s", resp["status"])
+				}
+				if tt.expectCB {
+					n, err := s.GetNotification(resp["id"])
+					if err != nil {
+						t.Fatal(err)
+					}
+					if n.CallbackURL == nil || *n.CallbackURL != tt.cbValue {
+						t.Errorf("expected callback_url %s, got %v", tt.cbValue, n.CallbackURL)
+					}
+				}
+			}
+		})
 	}
 }
 
 func TestSubmitNotificationWithIdempotencyKey(t *testing.T) {
 	app, s := newTestApp(t)
 	seedTestSupplier(t, s)
-
 	body := `{"supplier":"test-supplier","body":{"user_id":1},"idempotency_key":"key-123"}`
+
 	w1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest("POST", "/api/v1/notifications", strings.NewReader(body))
 	req1.Header.Set("Content-Type", "application/json")
@@ -57,31 +108,7 @@ func TestSubmitNotificationWithIdempotencyKey(t *testing.T) {
 	var r2 map[string]string
 	json.Unmarshal(w2.Body.Bytes(), &r2)
 	if r2["id"] != r1["id"] {
-		t.Fatalf("expected same id %s, got %s", r1["id"], r2["id"])
-	}
-}
-
-func TestSubmitNotificationMissingSupplier(t *testing.T) {
-	app, _ := newTestApp(t)
-	body := `{"body":{"user_id":1}}`
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/v1/notifications", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	app.Router.ServeHTTP(w, req)
-	if w.Code != 400 {
-		t.Fatalf("expected 400, got %d", w.Code)
-	}
-}
-
-func TestSubmitNotificationSupplierNotFound(t *testing.T) {
-	app, _ := newTestApp(t)
-	body := `{"supplier":"nonexistent","body":{}}`
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/v1/notifications", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	app.Router.ServeHTTP(w, req)
-	if w.Code != 400 {
-		t.Fatalf("expected 400, got %d", w.Code)
+		t.Errorf("expected same id %s, got %s", r1["id"], r2["id"])
 	}
 }
 
@@ -99,7 +126,7 @@ func TestGetNotification(t *testing.T) {
 	var n model.Notification
 	json.Unmarshal(w.Body.Bytes(), &n)
 	if n.ID != "n1" {
-		t.Fatalf("expected n1, got %s", n.ID)
+		t.Errorf("expected n1, got %s", n.ID)
 	}
 }
 
@@ -119,30 +146,6 @@ func TestListNotificationsByStatus(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &result)
 	if len(result) != 2 {
 		t.Fatalf("expected 2, got %d", len(result))
-	}
-}
-
-func TestSubmitNotificationWithCallbackURL(t *testing.T) {
-	app, s := newTestApp(t)
-	seedTestSupplier(t, s)
-
-	body := `{"supplier":"test-supplier","body":{"user_id":1},"callback_url":"https://biz.company.com/callback"}`
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/v1/notifications", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	app.Router.ServeHTTP(w, req)
-	if w.Code != 202 {
-		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp map[string]string
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	n, err := s.GetNotification(resp["id"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n.CallbackURL == nil || *n.CallbackURL != "https://biz.company.com/callback" {
-		t.Fatalf("expected callback_url, got %v", n.CallbackURL)
 	}
 }
 

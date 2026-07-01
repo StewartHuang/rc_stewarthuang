@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"testing"
 
 	"rc_stewarthuang/internal/model"
@@ -31,56 +32,105 @@ func seedSupplier(t *testing.T, s *Store) {
 }
 
 func TestCreateSupplier(t *testing.T) {
-	s := newTestStore(t)
-	sup := &model.Supplier{
-		Name:             "test-supplier",
-		URL:              "https://example.com/api",
-		Method:           "POST",
-		Headers:          `{"Content-Type": "application/json"}`,
-		RetryMaxAttempts: 10,
-		RetryBaseDelayMs: 1000,
-		RetryMaxDelayMs:  60000,
-		Enabled:          true,
+	tests := []struct {
+		name    string
+		preSeed bool
+		wantErr bool
+	}{
+		{name: "valid", wantErr: false},
+		{name: "duplicate name", preSeed: true, wantErr: true},
 	}
-	err := s.CreateSupplier(sup)
-	if err != nil {
-		t.Fatalf("CreateSupplier failed: %v", err)
-	}
-	if sup.ID == 0 {
-		t.Fatal("expected non-zero ID after creation")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			if tt.preSeed {
+				s.CreateSupplier(&model.Supplier{Name: "test-supplier", URL: "https://a.com", Method: "POST", Headers: "{}", Enabled: true})
+			}
+			sup := &model.Supplier{
+				Name:             "test-supplier",
+				URL:              "https://example.com/api",
+				Method:           "POST",
+				Headers:          `{"Content-Type": "application/json"}`,
+				RetryMaxAttempts: 10,
+				RetryBaseDelayMs: 1000,
+				RetryMaxDelayMs:  60000,
+				Enabled:          true,
+			}
+			err := s.CreateSupplier(sup)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CreateSupplier failed: %v", err)
+			}
+			if sup.ID == 0 {
+				t.Error("expected non-zero ID after creation")
+			}
+		})
 	}
 }
 
-func TestGetSupplierNotFound(t *testing.T) {
-	s := newTestStore(t)
-	_, err := s.GetSupplier("nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent supplier")
+func TestGetSupplier(t *testing.T) {
+	tests := []struct {
+		name      string
+		supName   string
+		seed      bool
+		wantErr   bool
+		wantEqual string
+	}{
+		{name: "found", supName: "test-supplier", seed: true, wantErr: false, wantEqual: "https://example.com"},
+		{name: "not found", supName: "nonexistent", seed: false, wantErr: true},
 	}
-}
-
-func TestCreateDuplicateSupplier(t *testing.T) {
-	s := newTestStore(t)
-	sup := &model.Supplier{Name: "dup", URL: "https://a.com", Method: "POST", Headers: "{}", Enabled: true}
-	if err := s.CreateSupplier(sup); err != nil {
-		t.Fatal(err)
-	}
-	sup2 := &model.Supplier{Name: "dup", URL: "https://b.com", Method: "POST", Headers: "{}", Enabled: true}
-	if err := s.CreateSupplier(sup2); err == nil {
-		t.Fatal("expected error for duplicate supplier name")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			if tt.seed {
+				seedSupplier(t, s)
+			}
+			sup, err := s.GetSupplier(tt.supName)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sup.URL != tt.wantEqual {
+				t.Errorf("expected URL %s, got %s", tt.wantEqual, sup.URL)
+			}
+		})
 	}
 }
 
 func TestListSuppliers(t *testing.T) {
-	s := newTestStore(t)
-	s.CreateSupplier(&model.Supplier{Name: "s1", URL: "https://a.com", Method: "POST", Headers: "{}", Enabled: true})
-	s.CreateSupplier(&model.Supplier{Name: "s2", URL: "https://b.com", Method: "POST", Headers: "{}", Enabled: true})
-	suppliers, err := s.ListSuppliers()
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		seed     int
+		wantLen  int
+	}{
+		{name: "multiple", seed: 2, wantLen: 2},
+		{name: "empty", seed: 0, wantLen: 0},
 	}
-	if len(suppliers) != 2 {
-		t.Fatalf("expected 2 suppliers, got %d", len(suppliers))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			for i := range tt.seed {
+				name := fmt.Sprintf("s%d", i+1)
+				s.CreateSupplier(&model.Supplier{Name: name, URL: "https://a.com", Method: "POST", Headers: "{}", Enabled: true})
+			}
+			sup, err := s.ListSuppliers()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sup) != tt.wantLen {
+				t.Errorf("expected %d suppliers, got %d", tt.wantLen, len(sup))
+			}
+		})
 	}
 }
 
@@ -99,14 +149,36 @@ func TestUpdateSupplier(t *testing.T) {
 }
 
 func TestDeleteSupplier(t *testing.T) {
-	s := newTestStore(t)
-	s.CreateSupplier(&model.Supplier{Name: "del", URL: "https://del.com", Method: "POST", Headers: "{}", Enabled: true})
-	if err := s.DeleteSupplier("del"); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		supName string
+		seed    bool
+		wantErr bool
+	}{
+		{name: "existing", supName: "del", seed: true, wantErr: false},
+		{name: "not found", supName: "nonexistent", seed: false, wantErr: true},
 	}
-	_, err := s.GetSupplier("del")
-	if err == nil {
-		t.Fatal("expected error after deletion")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			if tt.seed {
+				s.CreateSupplier(&model.Supplier{Name: tt.supName, URL: "https://del.com", Method: "POST", Headers: "{}", Enabled: true})
+			}
+			err := s.DeleteSupplier(tt.supName)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.GetSupplier(tt.supName)
+			if err == nil {
+				t.Error("expected error after deletion")
+			}
+		})
 	}
 }
 

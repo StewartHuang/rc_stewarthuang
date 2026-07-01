@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -9,7 +10,7 @@ import (
 
 func (a *App) ReplayDeadLetter(c *gin.Context) {
 	if err := a.Store.ReplayNotification(c.Param("id")); err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "notification not found or not in dead status"})
 			return
 		}

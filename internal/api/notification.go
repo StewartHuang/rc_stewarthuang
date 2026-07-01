@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -108,7 +109,7 @@ func (a *App) SubmitNotification(c *gin.Context) {
 func (a *App) GetNotification(c *gin.Context) {
 	n, err := a.Store.GetNotification(c.Param("id"))
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "notification not found"})
 			return
 		}
